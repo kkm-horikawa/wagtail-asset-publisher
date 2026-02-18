@@ -9,7 +9,7 @@ from wagtail import hooks
 from wagtail.models import Page
 
 
-@hooks.register("before_serve_page")
+@hooks.register("before_serve_page")  # type: ignore[untyped-decorator]
 def set_page_on_request(
     page: Page,
     request: HttpRequest,
