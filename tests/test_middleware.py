@@ -114,7 +114,7 @@ class TestGetPage:
     def test_returns_wagtailpage_attribute(self):
         """Returns page from request.wagtailpage attribute.
 
-        Purpose: Verify the primary Wagtail page detection path.
+        Purpose: Verify page detection via the before_serve_page hook.
         Category: Normal case
         Target: _get_page(request)
         Technique: Equivalence partitioning
@@ -123,24 +123,6 @@ class TestGetPage:
         page = mock.Mock()
         request = mock.Mock()
         request.wagtailpage = page
-        request._wagtail_page = None
-
-        result = _get_page(request)
-
-        assert result is page
-
-    def test_returns_wagtail_page_fallback(self):
-        """Returns page from request._wagtail_page when wagtailpage is None.
-
-        Purpose: Verify the fallback page detection path.
-        Category: Normal case
-        Target: _get_page(request)
-        Technique: Equivalence partitioning
-        Test data: Request with only _wagtail_page attribute set
-        """
-        page = mock.Mock()
-        request = mock.Mock(spec=[])
-        request._wagtail_page = page
 
         result = _get_page(request)
 
