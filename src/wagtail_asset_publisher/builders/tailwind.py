@@ -72,13 +72,23 @@ class TailwindCSSBuilder(BaseAssetBuilder):
 
         return "tailwindcss"
 
-    def _build_input_css(self, custom_css: str) -> str:
-        """Build the Tailwind input CSS combining base and custom styles."""
+    def _build_input_css(
+        self, custom_css: str, content_file: Path | None = None
+    ) -> str:
+        """Build the Tailwind input CSS combining base and custom styles.
+
+        When *content_file* is provided, a Tailwind v4 ``@source`` directive
+        is inserted so the JIT compiler scans only that file for utility
+        classes.
+        """
         base_css_path: str | None = get_setting("TAILWIND_BASE_CSS")
         if base_css_path:
             input_css = Path(base_css_path).read_text(encoding="utf-8")
         else:
             input_css = DEFAULT_TAILWIND_INPUT
+
+        if content_file is not None:
+            input_css += f'@source "{content_file}";\n'
 
         if custom_css:
             input_css += f"\n{custom_css}\n"
@@ -90,7 +100,6 @@ class TailwindCSSBuilder(BaseAssetBuilder):
         cli_path: str,
         input_file: Path,
         output_file: Path,
-        content_file: Path,
     ) -> list[str]:
         """Build the Tailwind CLI command arguments."""
         cmd = [
@@ -99,8 +108,6 @@ class TailwindCSSBuilder(BaseAssetBuilder):
             str(input_file),
             "--output",
             str(output_file),
-            "--content",
-            str(content_file),
             "--minify",
         ]
 
@@ -119,12 +126,15 @@ class TailwindCSSBuilder(BaseAssetBuilder):
             content_file.write_text(html_content, encoding="utf-8")
 
             input_file = tmppath / "input.css"
-            input_file.write_text(self._build_input_css(custom_css), encoding="utf-8")
+            input_file.write_text(
+                self._build_input_css(custom_css, content_file=content_file),
+                encoding="utf-8",
+            )
 
             output_file = tmppath / "output.css"
 
             cmd = self._build_command(
-                self._get_cli_path(), input_file, output_file, content_file
+                self._get_cli_path(), input_file, output_file
             )
 
             result = subprocess.run(  # noqa: S603
