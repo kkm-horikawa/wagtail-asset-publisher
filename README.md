@@ -169,6 +169,25 @@ For Tailwind mode, install with the `tailwind` extra:
 pip install wagtail-asset-publisher[tailwind]
 ```
 
+Set up django-tailwind-cli:
+
+```python
+# settings.py
+INSTALLED_APPS = [
+    # ...
+    "django_tailwind_cli",
+    # ...
+]
+```
+
+Download the Tailwind CLI binary:
+
+```bash
+python manage.py tailwind download_cli
+```
+
+> **Note:** `django-tailwind-cli` requires `STATICFILES_DIRS` to be configured. If not already set, add `STATICFILES_DIRS = [BASE_DIR / "static"]` to your settings.
+
 Configure the CSS builder:
 
 ```python
@@ -314,7 +333,10 @@ This is useful after:
 1. Install `django-tailwind-cli` (the CLI path is auto-detected)
 2. Or set `TAILWIND_CLI_PATH` explicitly to the binary location
 3. Or ensure `tailwindcss` is available on your system `PATH`
-4. The builder logs the error and falls back gracefully to raw CSS
+4. Confirm `django_tailwind_cli` is included in your `INSTALLED_APPS`
+5. Confirm `STATICFILES_DIRS` is configured (required by `django-tailwind-cli`)
+6. In Docker/CI environments, run `python manage.py tailwind download_cli` to download the binary
+7. The builder logs the error and falls back gracefully to raw CSS
 
 ### Snippet Publish Not Rebuilding Pages
 
