@@ -52,16 +52,22 @@ class TailwindCSSBuilder(BaseAssetBuilder):
             return custom_css.strip() if custom_css else ""
 
     def _get_cli_path(self) -> str:
-        """Resolve the Tailwind CLI binary path."""
+        """Resolve the Tailwind CLI binary path.
+
+        Resolution order:
+        1. ``TAILWIND_CLI_PATH`` in ``WAGTAIL_ASSET_PUBLISHER`` settings
+        2. ``django-tailwind-cli`` package (if installed and configured)
+        3. ``tailwindcss`` on PATH (fallback)
+        """
         configured: str | None = get_setting("TAILWIND_CLI_PATH")
         if configured:
             return configured
 
         try:
-            from django_tailwind_cli.utils import get_tailwind_cli_path  # type: ignore[import-not-found]  # noqa: I001
+            from django_tailwind_cli.config import get_config  # type: ignore[import-not-found]  # noqa: I001
 
-            return str(get_tailwind_cli_path())
-        except ImportError:
+            return str(get_config().cli_path)
+        except (ImportError, ValueError):
             pass
 
         return "tailwindcss"
