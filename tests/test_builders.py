@@ -356,7 +356,7 @@ class TestTailwindGetCliPath:
         """Auto-detects CLI path from django-tailwind-cli when available.
 
         Purpose: Verify that _get_cli_path() uses django-tailwind-cli's
-                 get_tailwind_cli_path() when TAILWIND_CLI_PATH is not set.
+                 get_config().cli_path when TAILWIND_CLI_PATH is not set.
         Category: Normal case
         Target: TailwindCSSBuilder._get_cli_path()
         Technique: Equivalence partitioning
@@ -364,9 +364,44 @@ class TestTailwindGetCliPath:
         """
         builder = TailwindCSSBuilder()
 
-        mock_utils = mock.MagicMock()
-        mock_utils.get_tailwind_cli_path.return_value = Path(
-            "/home/user/.cache/tailwindcss"
+        mock_config_obj = mock.MagicMock()
+        mock_config_obj.cli_path = Path("/home/user/.cache/tailwindcss")
+        mock_config_module = mock.MagicMock()
+        mock_config_module.get_config.return_value = mock_config_obj
+
+        with (
+            mock.patch(
+                "wagtail_asset_publisher.builders.tailwind.get_setting",
+                return_value=None,
+            ),
+            mock.patch.dict(
+                "sys.modules",
+                {
+                    "django_tailwind_cli": mock.MagicMock(),
+                    "django_tailwind_cli.config": mock_config_module,
+                },
+            ),
+        ):
+            result = builder._get_cli_path()
+
+        assert result == "/home/user/.cache/tailwindcss"
+
+    def test_cli_path_fallback_on_value_error(self):
+        """Falls back to 'tailwindcss' when get_config() raises ValueError.
+
+        Purpose: Verify that _get_cli_path() catches ValueError from
+                 get_config() (e.g. missing STATICFILES_DIRS) and falls
+                 back to the PATH-based 'tailwindcss' command.
+        Category: Error case
+        Target: TailwindCSSBuilder._get_cli_path()
+        Technique: Error guessing
+        Test data: get_config() raising ValueError
+        """
+        builder = TailwindCSSBuilder()
+
+        mock_config_module = mock.MagicMock()
+        mock_config_module.get_config.side_effect = ValueError(
+            "STATICFILES_DIRS is not configured"
         )
 
         with (
@@ -378,13 +413,13 @@ class TestTailwindGetCliPath:
                 "sys.modules",
                 {
                     "django_tailwind_cli": mock.MagicMock(),
-                    "django_tailwind_cli.utils": mock_utils,
+                    "django_tailwind_cli.config": mock_config_module,
                 },
             ),
         ):
             result = builder._get_cli_path()
 
-        assert result == "/home/user/.cache/tailwindcss"
+        assert result == "tailwindcss"
 
     def test_cli_path_fallback_to_command_name(self):
         """Falls back to 'tailwindcss' command when no other option available.
