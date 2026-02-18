@@ -94,12 +94,12 @@ def _handle_preview(response: HttpResponse) -> HttpResponse:
 
 
 def _get_page(request: HttpRequest) -> Any:
-    """Extract the Wagtail page from the request."""
-    # Wagtail sets this attribute during page serving
-    page = getattr(request, "wagtailpage", None)
-    if page is not None:
-        return page
-    return getattr(request, "_wagtail_page", None)
+    """Extract the Wagtail page from the request.
+
+    The ``wagtailpage`` attribute is set by our ``before_serve_page``
+    hook registered in ``wagtail_hooks.py``.
+    """
+    return getattr(request, "wagtailpage", None)
 
 
 def _get_published_assets(page_id: int) -> dict[str, Any]:
