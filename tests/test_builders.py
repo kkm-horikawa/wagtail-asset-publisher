@@ -452,9 +452,9 @@ class TestTailwindBuildInputCss:
         Purpose: Verify that _build_input_css() uses the default Tailwind
                  import statement when no base CSS file is configured.
         Category: Normal case
-        Target: TailwindCSSBuilder._build_input_css(custom_css)
+        Target: TailwindCSSBuilder._build_input_css(custom_css, content_file)
         Technique: Equivalence partitioning
-        Test data: No TAILWIND_BASE_CSS, no custom CSS
+        Test data: No TAILWIND_BASE_CSS, no custom CSS, content_file=None
         """
         builder = TailwindCSSBuilder()
 
@@ -462,7 +462,7 @@ class TestTailwindBuildInputCss:
             "wagtail_asset_publisher.builders.tailwind.get_setting",
             return_value=None,
         ):
-            result = builder._build_input_css("")
+            result = builder._build_input_css("", content_file=None)
 
         assert result == DEFAULT_TAILWIND_INPUT
 
@@ -472,9 +472,9 @@ class TestTailwindBuildInputCss:
         Purpose: Verify that _build_input_css() appends custom CSS content
                  after the base Tailwind import.
         Category: Normal case
-        Target: TailwindCSSBuilder._build_input_css(custom_css)
+        Target: TailwindCSSBuilder._build_input_css(custom_css, content_file)
         Technique: Equivalence partitioning
-        Test data: Custom CSS string
+        Test data: Custom CSS string, content_file=None
         """
         builder = TailwindCSSBuilder()
 
@@ -482,7 +482,7 @@ class TestTailwindBuildInputCss:
             "wagtail_asset_publisher.builders.tailwind.get_setting",
             return_value=None,
         ):
-            result = builder._build_input_css(".custom { color: red; }")
+            result = builder._build_input_css(".custom { color: red; }", content_file=None)
 
         assert DEFAULT_TAILWIND_INPUT in result
         assert ".custom { color: red; }" in result
@@ -493,9 +493,9 @@ class TestTailwindBuildInputCss:
         Purpose: Verify that _build_input_css() reads a file specified
                  by TAILWIND_BASE_CSS instead of using the default.
         Category: Normal case
-        Target: TailwindCSSBuilder._build_input_css(custom_css)
+        Target: TailwindCSSBuilder._build_input_css(custom_css, content_file)
         Technique: Equivalence partitioning
-        Test data: Mock base CSS file
+        Test data: Mock base CSS file, content_file=None
         """
         builder = TailwindCSSBuilder()
         base_css_content = '@import "tailwindcss";\n@layer components {}'
@@ -511,32 +511,81 @@ class TestTailwindBuildInputCss:
                 return_value=base_css_content,
             ),
         ):
-            result = builder._build_input_css("")
+            result = builder._build_input_css("", content_file=None)
 
         assert result == base_css_content
+
+    def test_adds_source_directive_for_content_file(self):
+        """Adds @source directive when content_file is provided.
+
+        Purpose: Verify that _build_input_css() inserts an @source directive
+                 referencing the content file path into the input CSS, enabling
+                 Tailwind v4 to scan the file for utility classes.
+        Category: Normal case
+        Target: TailwindCSSBuilder._build_input_css(custom_css, content_file)
+        Technique: Equivalence partitioning
+        Test data: content_file=/tmp/content.html, no custom CSS
+        """
+        builder = TailwindCSSBuilder()
+        content_file = Path("/tmp/content.html")
+
+        with mock.patch(
+            "wagtail_asset_publisher.builders.tailwind.get_setting",
+            return_value=None,
+        ):
+            result = builder._build_input_css("", content_file=content_file)
+
+        assert '@source "/tmp/content.html";' in result
+        assert DEFAULT_TAILWIND_INPUT in result
+
+    def test_source_directive_with_custom_css(self):
+        """Ordering: base CSS, then @source directive, then custom CSS.
+
+        Purpose: Verify that _build_input_css() produces output in the correct
+                 order: base import first, @source directive second, custom CSS
+                 last, ensuring Tailwind processes layers correctly.
+        Category: Normal case
+        Target: TailwindCSSBuilder._build_input_css(custom_css, content_file)
+        Technique: Statement coverage (C0)
+        Test data: content_file with custom CSS
+        """
+        builder = TailwindCSSBuilder()
+        content_file = Path("/tmp/content.html")
+        custom_css = ".custom { color: red; }"
+
+        with mock.patch(
+            "wagtail_asset_publisher.builders.tailwind.get_setting",
+            return_value=None,
+        ):
+            result = builder._build_input_css(custom_css, content_file=content_file)
+
+        base_pos = result.index('@import "tailwindcss"')
+        source_pos = result.index('@source "/tmp/content.html"')
+        custom_pos = result.index(".custom { color: red; }")
+        assert base_pos < source_pos < custom_pos
 
 
 class TestTailwindBuildCommand:
     def test_builds_basic_command(self):
-        """Builds correct CLI command with input/output/content/minify flags.
+        """Builds correct CLI command with input/output/minify flags (no --content).
 
-        Purpose: Verify that _build_command() produces the correct
-                 Tailwind CLI command arguments.
+        Purpose: Verify that _build_command() produces the correct Tailwind CLI
+                 command arguments. In v4, --content is no longer used because
+                 content scanning is handled via @source directive in input CSS.
         Category: Normal case
-        Target: TailwindCSSBuilder._build_command(cli_path, input_file, output_file, content_file)
+        Target: TailwindCSSBuilder._build_command(cli_path, input_file, output_file)
         Technique: Equivalence partitioning
         Test data: Standard path arguments
         """
         builder = TailwindCSSBuilder()
         input_f = Path("/tmp/input.css")
         output_f = Path("/tmp/output.css")
-        content_f = Path("/tmp/content.html")
 
         with mock.patch(
             "wagtail_asset_publisher.builders.tailwind.get_setting",
             return_value=None,
         ):
-            result = builder._build_command("tailwindcss", input_f, output_f, content_f)
+            result = builder._build_command("tailwindcss", input_f, output_f)
 
         assert result == [
             "tailwindcss",
@@ -544,8 +593,6 @@ class TestTailwindBuildCommand:
             str(input_f),
             "--output",
             str(output_f),
-            "--content",
-            str(content_f),
             "--minify",
         ]
 
@@ -562,22 +609,22 @@ class TestTailwindBuildCommand:
         builder = TailwindCSSBuilder()
         input_f = Path("/tmp/input.css")
         output_f = Path("/tmp/output.css")
-        content_f = Path("/tmp/content.html")
 
         with mock.patch(
             "wagtail_asset_publisher.builders.tailwind.get_setting",
             return_value="/path/to/tailwind.config.js",
         ):
-            result = builder._build_command("tailwindcss", input_f, output_f, content_f)
+            result = builder._build_command("tailwindcss", input_f, output_f)
 
         assert "--config" in result
         assert "/path/to/tailwind.config.js" in result
 
     def test_no_config_when_setting_is_none(self):
-        """No --config flag when TAILWIND_CONFIG is None.
+        """No --config or --content flags when TAILWIND_CONFIG is None.
 
         Purpose: Verify that _build_command() does not add --config
-                 when the setting is None.
+                 when the setting is None, and never includes --content
+                 (removed in v4 migration).
         Category: Normal case
         Target: TailwindCSSBuilder._build_command()
         Technique: Decision coverage (C1) - no config branch
@@ -586,15 +633,15 @@ class TestTailwindBuildCommand:
         builder = TailwindCSSBuilder()
         input_f = Path("/tmp/input.css")
         output_f = Path("/tmp/output.css")
-        content_f = Path("/tmp/content.html")
 
         with mock.patch(
             "wagtail_asset_publisher.builders.tailwind.get_setting",
             return_value=None,
         ):
-            result = builder._build_command("tailwindcss", input_f, output_f, content_f)
+            result = builder._build_command("tailwindcss", input_f, output_f)
 
         assert "--config" not in result
+        assert "--content" not in result
 
 
 class TestTailwindRunTailwind:
@@ -604,6 +651,8 @@ class TestTailwindRunTailwind:
 
         Purpose: Verify that _run_tailwind() raises SubprocessError
                  when the Tailwind CLI exits with a non-zero code.
+                 In v4, _run_tailwind passes content_file to
+                 _build_input_css instead of _build_command.
         Category: Error case
         Target: TailwindCSSBuilder._run_tailwind(html_content, custom_css)
         Technique: Error guessing
@@ -619,7 +668,9 @@ class TestTailwindRunTailwind:
         with (
             mock.patch.object(builder, "_get_cli_path", return_value="tailwindcss"),
             mock.patch.object(
-                builder, "_build_input_css", return_value='@import "tailwindcss";'
+                builder,
+                "_build_input_css",
+                return_value='@import "tailwindcss";\n@source "/tmp/content.html";',
             ),
             mock.patch("wagtail_asset_publisher.builders.tailwind.Path.write_text"),
             pytest.raises(subprocess.SubprocessError, match="Tailwind CLI failed"),
