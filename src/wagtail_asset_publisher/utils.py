@@ -73,39 +73,53 @@ def _process_css(page: Any, storage: Any) -> None:
 
 
 def _process_js(page: Any, storage: Any) -> None:
-    """Process JS assets for a page."""
+    """Process JS assets for a page, grouped by loading strategy."""
     from .models import PublishedAsset
 
     builder = get_builder(get_setting("JS_BUILDER"))
-
     _, scripts = extract_assets_from_page(page)
-    extracted_js = [s.content for s in scripts]
-    content_hashes = [s.content_hash for s in scripts]
 
-    built_js = builder.build(None, extracted_js, "js")
+    groups: dict[str, list[Any]] = {}
+    for script in scripts:
+        groups.setdefault(script.loading, []).append(script)
 
-    if not built_js:
-        _clear_asset(page, "js", storage)
+    _clear_js_assets(page, storage)
+
+    if not groups:
         invalidate_cache(page.pk)
         return
 
-    if get_setting("OBFUSCATE_JS"):
-        built_js = _optimize_js(built_js)
+    for loading, group_scripts in groups.items():
+        extracted_js = [s.content for s in group_scripts]
+        content_hashes = [s.content_hash for s in group_scripts]
 
-    js_hash = compute_content_hash(built_js, get_setting("HASH_LENGTH"))
-    prefix = get_setting("JS_PREFIX")
-    filename = f"{prefix}{page.pk}-{js_hash}.js"
+        built_js = builder.build(None, extracted_js, "js")
+        if not built_js:
+            continue
 
-    _clear_asset(page, "js", storage)
+        if get_setting("OBFUSCATE_JS"):
+            built_js = _optimize_js(built_js)
 
-    url = storage.save(filename, built_js)
+        js_hash = compute_content_hash(built_js, get_setting("HASH_LENGTH"))
+        prefix = get_setting("JS_PREFIX")
+        loading_suffix = f"-{loading}" if loading else ""
+        filename = f"{prefix}{page.pk}-{js_hash}{loading_suffix}.js"
 
-    PublishedAsset.objects.update_or_create(
-        page=page,
-        asset_type="js",
-        defaults={"url": url, "content_hashes": content_hashes},
-    )
-    logger.info("Published JS for page %d: %s", page.pk, url)
+        url = storage.save(filename, built_js)
+
+        PublishedAsset.objects.update_or_create(
+            page=page,
+            asset_type="js",
+            loading=loading,
+            defaults={"url": url, "content_hashes": content_hashes},
+        )
+        logger.info(
+            "Published JS (%s) for page %d: %s",
+            loading or "blocking",
+            page.pk,
+            url,
+        )
+
     invalidate_cache(page.pk)
 
 
@@ -177,7 +191,7 @@ def _find_terser() -> str | None:
 
 
 def _clear_asset(page: Any, asset_type: str, storage: Any) -> None:
-    """Remove existing published asset from storage and DB."""
+    """Remove a single published asset (CSS) from storage and DB."""
     from .models import PublishedAsset
 
     try:
@@ -188,6 +202,17 @@ def _clear_asset(page: Any, asset_type: str, storage: Any) -> None:
         asset.delete()
     except PublishedAsset.DoesNotExist:
         pass
+
+
+def _clear_js_assets(page: Any, storage: Any) -> None:
+    """Remove ALL JS published assets for a page from storage and DB."""
+    from .models import PublishedAsset
+
+    for asset in PublishedAsset.objects.filter(page=page, asset_type="js"):
+        path = _extract_path_from_url(asset.url)
+        if path and storage.exists(path):
+            storage.delete(path)
+        asset.delete()
 
 
 def _extract_path_from_url(url: str) -> str:
