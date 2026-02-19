@@ -50,6 +50,7 @@ class AssetPublisherMiddleware:
         charset = response.charset or "utf-8"
         content = response.content.decode(charset)
         content = _process_html(content, assets)
+        content = _minify_html(content)
         response.content = content.encode(charset)
         response["Content-Length"] = len(response.content)
 
@@ -154,6 +155,31 @@ def _escape_attr(value: str) -> str:
         .replace('"', "&quot;")
         .replace("<", "&lt;")
         .replace(">", "&gt;")
+    )
+
+
+def _minify_html(html: str) -> str:
+    """Minify HTML to reduce response size.
+
+    Uses minify-html if available and MINIFY_HTML setting is enabled.
+    Falls back to returning HTML unchanged if library is not installed.
+    """
+    from .conf import get_setting
+
+    if not get_setting("MINIFY_HTML"):
+        return html
+
+    try:
+        import minify_html
+    except ImportError:
+        return html
+
+    return minify_html.minify(  # type: ignore[no-any-return]
+        html,
+        minify_css=True,
+        minify_js=True,
+        keep_closing_tags=True,
+        keep_html_and_head_opening_tags=True,
     )
 
 
