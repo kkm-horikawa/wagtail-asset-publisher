@@ -24,7 +24,13 @@ class Migration(migrations.Migration):
                         verbose_name="ID",
                     ),
                 ),
-                ("asset_type", models.CharField(max_length=3)),
+                (
+                    "asset_type",
+                    models.CharField(
+                        choices=[("css", "CSS"), ("js", "JavaScript")],
+                        max_length=3,
+                    ),
+                ),
                 ("url", models.URLField(max_length=2048)),
                 ("content_hashes", models.JSONField(default=list)),
                 ("updated_at", models.DateTimeField(auto_now=True)),
