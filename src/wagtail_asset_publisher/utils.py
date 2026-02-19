@@ -66,6 +66,7 @@ def _process_css(page: Any, storage: Any) -> None:
     PublishedAsset.objects.update_or_create(
         page=page,
         asset_type="css",
+        loading="",  # CSS has no loading strategies
         defaults={"url": url, "content_hashes": content_hashes},
     )
     logger.info("Published CSS for page %d: %s", page.pk, url)
@@ -191,7 +192,11 @@ def _find_terser() -> str | None:
 
 
 def _clear_asset(page: Any, asset_type: str, storage: Any) -> None:
-    """Remove a single published asset (CSS) from storage and DB."""
+    """Remove a single published asset (CSS) from storage and DB.
+
+    Only used for CSS cleanup where loading is always "".
+    JS uses _clear_js_assets() which handles multiple loading groups.
+    """
     from .models import PublishedAsset
 
     try:

@@ -216,6 +216,70 @@ class TestProcessCss:
             "css",
         )
 
+    @mock.patch("wagtail_asset_publisher.utils.invalidate_cache")
+    @mock.patch(
+        "wagtail_asset_publisher.utils.compute_content_hash", return_value="css12345"
+    )
+    @mock.patch("wagtail_asset_publisher.utils.get_page_html_for_tailwind")
+    @mock.patch("wagtail_asset_publisher.utils.extract_assets_from_page")
+    @mock.patch("wagtail_asset_publisher.utils.get_setting")
+    @mock.patch("wagtail_asset_publisher.utils.get_builder")
+    def test_update_or_create_passes_empty_loading_for_css(
+        self,
+        mock_get_builder,
+        mock_get_setting,
+        mock_extract,
+        mock_get_html,
+        mock_hash,
+        mock_invalidate,
+    ):
+        """_process_cssがupdate_or_createにloading=""を明示的に渡すことを検証する。
+
+        【目的】unique_together=("page", "asset_type", "loading")に対して
+               CSSアセット作成時にloading=""を明示することで、
+               JSアセットとのunique制約の整合性を保証する
+        【種別】正常系テスト
+        【対象】_process_css(page, storage) -> PublishedAsset.objects.update_or_create
+        【技法】同値分割（CSS固有のloading値伝搬）
+        【テストデータ】スタイル1件
+        """
+        page = mock.Mock(pk=42)
+        storage = mock.Mock()
+        storage.save.return_value = "/media/page-assets/css/42-css12345.css"
+
+        style = mock.Mock()
+        style.content = "body { color: blue; }"
+        style.content_hash = "hash_css"
+        mock_extract.return_value = ([style], [])
+
+        mock_builder = mock.Mock()
+        mock_builder.requires_html_content = False
+        mock_builder.build.return_value = "body { color: blue; }"
+        mock_get_builder.return_value = mock_builder
+
+        mock_get_setting.side_effect = lambda key: {
+            "CSS_BUILDER": "wagtail_asset_publisher.builders.raw.RawAssetBuilder",
+            "MINIFY_CSS": False,
+            "HASH_LENGTH": 8,
+            "CSS_PREFIX": "page-assets/css/",
+        }[key]
+
+        with (
+            mock.patch("wagtail_asset_publisher.models.PublishedAsset") as mock_pa,
+            mock.patch("wagtail_asset_publisher.utils._clear_asset"),
+        ):
+            _process_css(page, storage)
+
+            mock_pa.objects.update_or_create.assert_called_once_with(
+                page=page,
+                asset_type="css",
+                loading="",
+                defaults={
+                    "url": "/media/page-assets/css/42-css12345.css",
+                    "content_hashes": ["hash_css"],
+                },
+            )
+
 
 class TestProcessJs:
     @mock.patch("wagtail_asset_publisher.utils.invalidate_cache")
