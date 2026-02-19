@@ -64,7 +64,7 @@ class TailwindCSSBuilder(BaseAssetBuilder):
             return configured
 
         try:
-            from django_tailwind_cli.config import get_config  # noqa: I001
+            from django_tailwind_cli.config import get_config  # type: ignore[import-not-found]  # noqa: I001
 
             return str(get_config().cli_path)
         except (ImportError, ValueError):

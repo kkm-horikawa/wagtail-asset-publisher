@@ -134,7 +134,7 @@ def _optimize_js(content: str) -> str:
             logger.warning("terser failed: %s. Falling back to rjsmin.", e)
 
     try:
-        import rjsmin  # type: ignore[import-not-found]
+        import rjsmin  # type: ignore[import-not-found, import-untyped]
 
         return rjsmin.jsmin(content)  # type: ignore[no-any-return]
     except ImportError:
@@ -150,7 +150,7 @@ def _minify_css(content: str) -> str:
     Falls back gracefully if rcssmin is not installed.
     """
     try:
-        import rcssmin  # type: ignore[import-not-found]
+        import rcssmin  # type: ignore[import-not-found, import-untyped]
 
         return rcssmin.cssmin(content)  # type: ignore[no-any-return]
     except ImportError:

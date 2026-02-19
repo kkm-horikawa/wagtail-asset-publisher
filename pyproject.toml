@@ -128,6 +128,7 @@ plugins = ["mypy_django_plugin.main"]
 strict = true
 warn_unreachable = true
 exclude = ["tests/"]
+disable_error_code = ["unused-ignore"]
 
 [[tool.mypy.overrides]]
 module = ["wagtail.*"]
