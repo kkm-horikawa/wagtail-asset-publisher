@@ -61,6 +61,19 @@ source .venv/bin/activate
 pip install -e ".[dev]"
 ```
 
+To work on optional features, install the corresponding extras:
+
+```bash
+# CSS minification and JS optimization (rcssmin + rjsmin)
+uv pip install -e ".[dev,minify]"
+
+# Tailwind CSS JIT support
+uv pip install -e ".[dev,tailwind]"
+
+# All extras
+uv pip install -e ".[dev,minify,tailwind]"
+```
+
 > **Note:** We use `uv pip install` instead of `uv sync` because this is a **library project**.
 > We don't commit `uv.lock` to maintain dependency flexibility for downstream users.
 > See [Project Management](#project-management) for more details.

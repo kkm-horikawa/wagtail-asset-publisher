@@ -189,6 +189,76 @@ class TestDefaultValues:
             "TAILWIND_CLI_PATH",
             "TAILWIND_CONFIG",
             "TAILWIND_BASE_CSS",
+            "OBFUSCATE_JS",
+            "MINIFY_CSS",
+            "TERSER_PATH",
+            "TERSER_OPTIONS",
         }
 
         assert required_keys.issubset(set(DEFAULTS.keys()))
+
+
+class TestAssetOptimizationDefaults:
+    """Tests for asset optimization default settings added in Issue #13."""
+
+    def test_obfuscate_js_default_is_false(self):
+        """OBFUSCATE_JS defaults to False.
+
+        Purpose: Verify that OBFUSCATE_JS defaults to False, ensuring JS obfuscation is disabled by default.
+        Category: Normal case
+        Target: DEFAULTS["OBFUSCATE_JS"]
+        Technique: Equivalence partitioning
+        Test data: DEFAULTS dict value
+        """
+        assert DEFAULTS["OBFUSCATE_JS"] is False
+
+    def test_minify_css_default_is_true(self):
+        """MINIFY_CSS defaults to True.
+
+        Purpose: Verify that MINIFY_CSS defaults to True, ensuring CSS minification is enabled by default.
+        Category: Normal case
+        Target: DEFAULTS["MINIFY_CSS"]
+        Technique: Equivalence partitioning
+        Test data: DEFAULTS dict value
+        """
+        assert DEFAULTS["MINIFY_CSS"] is True
+
+    def test_terser_path_default_is_none(self):
+        """TERSER_PATH defaults to None.
+
+        Purpose: Verify that TERSER_PATH defaults to None, ensuring automatic terser path detection is enabled by default.
+        Category: Normal case
+        Target: DEFAULTS["TERSER_PATH"]
+        Technique: Equivalence partitioning
+        Test data: DEFAULTS dict value
+        """
+        assert DEFAULTS["TERSER_PATH"] is None
+
+    def test_terser_options_default(self):
+        """TERSER_OPTIONS defaults to ["-c", "-m"].
+
+        Purpose: Verify that TERSER_OPTIONS defaults to compress-and-mangle options, ensuring standard terser optimization settings.
+        Category: Normal case
+        Target: DEFAULTS["TERSER_OPTIONS"]
+        Technique: Equivalence partitioning
+        Test data: DEFAULTS dict value
+        """
+        assert DEFAULTS["TERSER_OPTIONS"] == ["-c", "-m"]
+
+    def test_defaults_contains_asset_optimization_keys(self):
+        """DEFAULTS contains all keys required for asset optimization.
+
+        Purpose: Verify that DEFAULTS includes all 4 keys added in Issue #13, ensuring complete configuration for the asset optimization feature.
+        Category: Normal case
+        Target: DEFAULTS dict
+        Technique: Equivalence partitioning
+        Test data: Set of key names required for asset optimization
+        """
+        optimization_keys = {
+            "OBFUSCATE_JS",
+            "MINIFY_CSS",
+            "TERSER_PATH",
+            "TERSER_OPTIONS",
+        }
+
+        assert optimization_keys.issubset(set(DEFAULTS.keys()))
