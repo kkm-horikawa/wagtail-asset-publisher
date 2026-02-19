@@ -1,10 +1,13 @@
 """Tests for wagtail_asset_publisher.extractors module.
 
 Covers the AssetExtractor HTML parser, compute_content_hash,
-extract_assets, and extract_assets_from_page functions.
+extract_assets, extract_assets_from_page functions,
+and _resolve_loading_strategy for script loading attributes.
 """
 
 from unittest import mock
+
+import pytest
 
 from wagtail_asset_publisher.extractors import (
     ExtractedAsset,
@@ -164,6 +167,248 @@ class TestExtractAssetsSkipBehavior:
 
         assert len(scripts) == 1
         assert scripts[0].content == 'console.log("inline");'
+
+
+class TestResolveLoadingStrategy:
+    """Tests for _resolve_loading_strategy via extract_assets.
+
+    ## Decision Table: DT-LOADING-STRATEGY
+
+    | ID   | type attr              | async | defer | Expected loading | Extracted? |
+    |------|------------------------|-------|-------|------------------|------------|
+    | DT1  | (none)                 | no    | no    | ""               | yes        |
+    | DT2  | (none)                 | no    | yes   | "defer"          | yes        |
+    | DT3  | (none)                 | yes   | no    | "async"          | yes        |
+    | DT4  | (none)                 | yes   | yes   | "async"          | yes        |
+    | DT5  | "module"               | no    | no    | "module"         | yes        |
+    | DT6  | "module"               | yes   | no    | "module-async"   | yes        |
+    | DT7  | "module"               | no    | yes   | "module"         | yes        |
+    | DT8  | "text/javascript"      | no    | no    | ""               | yes        |
+    | DT9  | "application/javascript"| no   | no    | ""               | yes        |
+    | DT10 | "importmap"            | no    | no    | N/A              | no         |
+    | DT11 | "speculationrules"     | no    | no    | N/A              | no         |
+    | DT12 | "text/template"        | no    | no    | N/A              | no         |
+    | DT13 | "module"               | yes   | yes   | "module-async"   | yes        |
+    """
+
+    @pytest.mark.parametrize(
+        "tag,expected_loading",
+        [
+            pytest.param("<script>code();</script>", "", id="DT1-no-attrs"),
+            pytest.param("<script defer>code();</script>", "defer", id="DT2-defer"),
+            pytest.param("<script async>code();</script>", "async", id="DT3-async"),
+            pytest.param(
+                "<script async defer>code();</script>",
+                "async",
+                id="DT4-async-defer-async-wins",
+            ),
+            pytest.param(
+                '<script type="module">code();</script>',
+                "module",
+                id="DT5-module",
+            ),
+            pytest.param(
+                '<script type="module" async>code();</script>',
+                "module-async",
+                id="DT6-module-async",
+            ),
+            pytest.param(
+                '<script type="module" defer>code();</script>',
+                "module",
+                id="DT7-module-defer-inherently-deferred",
+            ),
+            pytest.param(
+                '<script type="text/javascript">code();</script>',
+                "",
+                id="DT8-text-javascript-mime",
+            ),
+            pytest.param(
+                '<script type="application/javascript">code();</script>',
+                "",
+                id="DT9-application-javascript-mime",
+            ),
+            pytest.param(
+                '<script type="module" async defer>code();</script>',
+                "module-async",
+                id="DT13-module-async-defer",
+            ),
+        ],
+    )
+    def test_loading_strategy_for_extracted_scripts(self, tag, expected_loading):
+        """DT-LOADING-STRATEGY参照: 各属性パターンに対するloading値を検証する。
+
+        【目的】<script>タグの属性組み合わせに応じて、正しいloading strategy
+               が設定されることをもって、スクリプトの読み込み戦略の分類要件を保証する
+        【種別】正常系テスト
+        【対象】AssetExtractor._resolve_loading_strategy(attr_dict)
+        【技法】デシジョンテーブル
+        【テストデータ】DT-LOADING-STRATEGYのDT1-DT9, DT13パターン
+        """
+        _, scripts = extract_assets(tag)
+
+        assert len(scripts) == 1
+        assert scripts[0].loading == expected_loading
+
+    @pytest.mark.parametrize(
+        "tag",
+        [
+            pytest.param(
+                '<script type="importmap">{"imports": {}}</script>',
+                id="DT10-importmap-skipped",
+            ),
+            pytest.param(
+                '<script type="speculationrules">{"prefetch": []}</script>',
+                id="DT11-speculationrules-skipped",
+            ),
+            pytest.param(
+                '<script type="text/template"><div>template</div></script>',
+                id="DT12-text-template-skipped",
+            ),
+        ],
+    )
+    def test_non_js_type_scripts_not_extracted(self, tag):
+        """DT-LOADING-STRATEGY参照: 非JSタイプのscriptが抽出されないことを検証する。
+
+        【目的】importmap, speculationrules, text/template等の非JSタイプの
+               scriptタグが抽出対象から除外されることをもって、
+               非実行スクリプトの保護要件を保証する
+        【種別】正常系テスト（スキップ動作）
+        【対象】AssetExtractor._resolve_loading_strategy(attr_dict)
+        【技法】デシジョンテーブル
+        【テストデータ】DT-LOADING-STRATEGYのDT10-DT12パターン
+        """
+        _, scripts = extract_assets(tag)
+
+        assert scripts == []
+
+    def test_default_script_has_empty_loading(self):
+        """属性なし<script>のloading値がデフォルト空文字であることを検証する。
+
+        【目的】<script>タグにasync/defer/type属性がない場合、
+               loading=""（ブロッキング）として分類されることを保証する
+        【種別】正常系テスト
+        【対象】extract_assets(html) -> ExtractedAsset.loading
+        【技法】同値分割（属性なしクラスの代表値）
+        【テストデータ】属性なしの<script>タグ
+        """
+        html = "<script>console.log('default');</script>"
+
+        _, scripts = extract_assets(html)
+
+        assert len(scripts) == 1
+        assert scripts[0].loading == ""
+
+    def test_mixed_loading_strategies_all_extracted(self):
+        """異なるloading strategyのスクリプトが全て正しく抽出されることを検証する。
+
+        【目的】複数のloading strategyが混在するHTMLから、各スクリプトが
+               正しいloading値で個別に抽出されることを保証する
+        【種別】正常系テスト
+        【対象】extract_assets(html)
+        【技法】状態遷移（パーサの連続タグ処理）
+        【テストデータ】blocking, defer, async, moduleの4種類の<script>タグ
+        """
+        html = (
+            "<script>blocking();</script>"
+            "<script defer>deferred();</script>"
+            "<script async>asynced();</script>"
+            '<script type="module">modular();</script>'
+        )
+
+        _, scripts = extract_assets(html)
+
+        assert len(scripts) == 4
+        assert scripts[0].loading == ""
+        assert scripts[0].content == "blocking();"
+        assert scripts[1].loading == "defer"
+        assert scripts[1].content == "deferred();"
+        assert scripts[2].loading == "async"
+        assert scripts[2].content == "asynced();"
+        assert scripts[3].loading == "module"
+        assert scripts[3].content == "modular();"
+
+    def test_non_js_type_mixed_with_js_scripts(self):
+        """非JSタイプのscriptが除外され、JSスクリプトのみ抽出されることを検証する。
+
+        【目的】importmapタグと通常スクリプトが混在する場合、
+               importmapのみがスキップされ通常スクリプトが正しく抽出されることを保証する
+        【種別】正常系テスト（混在ケース）
+        【対象】extract_assets(html)
+        【技法】同値分割（抽出対象と非対象の混在）
+        【テストデータ】importmapタグ1つ + 通常scriptタグ1つ
+        """
+        html = (
+            '<script type="importmap">{"imports": {}}</script>'
+            "<script>normal();</script>"
+        )
+
+        _, scripts = extract_assets(html)
+
+        assert len(scripts) == 1
+        assert scripts[0].content == "normal();"
+        assert scripts[0].loading == ""
+
+
+class TestExtractedAssetLoadingField:
+    """Tests for ExtractedAsset loading field default value."""
+
+    def test_extracted_asset_loading_default(self):
+        """ExtractedAssetのloading値がデフォルトで空文字であることを検証する。
+
+        【目的】ExtractedAsset NamedTupleのloading fieldがデフォルトで
+               空文字に設定されることを保証する
+        【種別】正常系テスト
+        【対象】ExtractedAsset(content, content_hash)
+        【技法】境界値分析（デフォルト値）
+        【テストデータ】loadingを指定しないExtractedAsset
+        """
+        asset = ExtractedAsset(content="body {}", content_hash="abc12345")
+
+        assert asset.loading == ""
+
+    def test_extracted_asset_loading_explicit(self):
+        """ExtractedAssetのloading値を明示的に設定できることを検証する。
+
+        【目的】ExtractedAsset NamedTupleのloading fieldに明示的な値を
+               設定できることを保証する
+        【種別】正常系テスト
+        【対象】ExtractedAsset(content, content_hash, loading)
+        【技法】同値分割（明示的なloading値）
+        【テストデータ】loading="defer"のExtractedAsset
+        """
+        asset = ExtractedAsset(
+            content="body {}", content_hash="abc12345", loading="defer"
+        )
+
+        assert asset.loading == "defer"
+
+    def test_extracted_asset_equality_with_loading(self):
+        """同じloading値のExtractedAssetが等価であることを検証する。
+
+        【目的】loading fieldを含むExtractedAssetの等価性が正しく機能することを保証する
+        【種別】正常系テスト
+        【対象】ExtractedAsset equality
+        【技法】同値分割
+        【テストデータ】同一のcontent, content_hash, loadingを持つ2つのインスタンス
+        """
+        asset1 = ExtractedAsset(content="x", content_hash="h", loading="module")
+        asset2 = ExtractedAsset(content="x", content_hash="h", loading="module")
+
+        assert asset1 == asset2
+
+    def test_extracted_asset_inequality_by_loading(self):
+        """異なるloading値のExtractedAssetが不等であることを検証する。
+
+        【目的】loading fieldが異なるExtractedAssetが不等であることを保証する
+        【種別】正常系テスト
+        【対象】ExtractedAsset inequality
+        【技法】同値分割（異なるloading値）
+        【テストデータ】loadingのみ異なる2つのインスタンス
+        """
+        asset1 = ExtractedAsset(content="x", content_hash="h", loading="defer")
+        asset2 = ExtractedAsset(content="x", content_hash="h", loading="async")
+
+        assert asset1 != asset2
 
 
 class TestExtractAssetsEdgeCases:

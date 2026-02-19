@@ -11,6 +11,7 @@ import pytest
 
 from wagtail_asset_publisher.utils import (
     _clear_asset,
+    _clear_js_assets,
     _extract_path_from_url,
     _find_terser,
     _minify_css,
@@ -317,6 +318,497 @@ class TestProcessJs:
         mock_clear.assert_called_once_with(page, storage)
         storage.save.assert_not_called()
         mock_invalidate.assert_called_with(42)
+
+
+class TestProcessJsLoadingGroups:
+    """Tests for JS grouping by loading strategy in _process_js."""
+
+    @mock.patch("wagtail_asset_publisher.utils.invalidate_cache")
+    @mock.patch(
+        "wagtail_asset_publisher.utils.compute_content_hash", return_value="grp12345"
+    )
+    @mock.patch("wagtail_asset_publisher.utils.extract_assets_from_page")
+    @mock.patch("wagtail_asset_publisher.utils.get_setting")
+    @mock.patch("wagtail_asset_publisher.utils.get_builder")
+    def test_scripts_grouped_by_loading_strategy(
+        self,
+        mock_get_builder,
+        mock_get_setting,
+        mock_extract,
+        mock_hash,
+        mock_invalidate,
+    ):
+        """異なるloading strategyのスクリプトが別ファイルに保存されることを検証する。
+
+        【目的】_process_jsがloading strategy別にスクリプトをグループ化し、
+               各グループを別ファイルとしてstorage.saveすることをもって、
+               スクリプト読み込み戦略のファイル分離要件を保証する
+        【種別】正常系テスト
+        【対象】_process_js(page, storage)
+        【技法】デシジョンテーブル（loading値ごとのグループ化）
+        【テストデータ】blocking, defer, moduleの3つのスクリプト
+        """
+        page = mock.Mock(pk=42)
+        storage = mock.Mock()
+        storage.save.return_value = "/media/page-assets/js/42-grp12345.js"
+
+        blocking_script = mock.Mock()
+        blocking_script.content = "blocking();"
+        blocking_script.content_hash = "hash_blocking"
+        blocking_script.loading = ""
+
+        defer_script = mock.Mock()
+        defer_script.content = "deferred();"
+        defer_script.content_hash = "hash_defer"
+        defer_script.loading = "defer"
+
+        module_script = mock.Mock()
+        module_script.content = "import x from 'y';"
+        module_script.content_hash = "hash_module"
+        module_script.loading = "module"
+
+        mock_extract.return_value = (
+            [],
+            [blocking_script, defer_script, module_script],
+        )
+
+        mock_builder = mock.Mock()
+        mock_builder.build.return_value = "built_js_content"
+        mock_get_builder.return_value = mock_builder
+
+        mock_get_setting.side_effect = lambda key: {
+            "JS_BUILDER": "wagtail_asset_publisher.builders.raw.RawAssetBuilder",
+            "OBFUSCATE_JS": False,
+            "HASH_LENGTH": 8,
+            "JS_PREFIX": "page-assets/js/",
+        }[key]
+
+        with (
+            mock.patch("wagtail_asset_publisher.models.PublishedAsset") as mock_pa,
+            mock.patch("wagtail_asset_publisher.utils._clear_js_assets"),
+        ):
+            _process_js(page, storage)
+
+            assert mock_pa.objects.update_or_create.call_count == 3
+
+        assert storage.save.call_count == 3
+        assert mock_builder.build.call_count == 3
+
+    @mock.patch("wagtail_asset_publisher.utils.invalidate_cache")
+    @mock.patch(
+        "wagtail_asset_publisher.utils.compute_content_hash", return_value="fn123456"
+    )
+    @mock.patch("wagtail_asset_publisher.utils.extract_assets_from_page")
+    @mock.patch("wagtail_asset_publisher.utils.get_setting")
+    @mock.patch("wagtail_asset_publisher.utils.get_builder")
+    def test_filename_includes_loading_suffix_for_non_blocking(
+        self,
+        mock_get_builder,
+        mock_get_setting,
+        mock_extract,
+        mock_hash,
+        mock_invalidate,
+    ):
+        """non-blockingスクリプトのファイル名にloading suffixが付与されることを検証する。
+
+        【目的】loading値が空でないスクリプトのファイル名に"-{loading}"サフィックスが
+               付与されることをもって、ファイル名によるloading strategy識別要件を保証する
+        【種別】正常系テスト
+        【対象】_process_js(page, storage) のファイル名生成
+        【技法】境界値分析（空文字 vs 非空文字のloading値）
+        【テストデータ】loading="defer"のスクリプト
+        """
+        page = mock.Mock(pk=42)
+        storage = mock.Mock()
+        storage.save.return_value = "/media/page-assets/js/42-fn123456-defer.js"
+
+        script = mock.Mock()
+        script.content = "deferred();"
+        script.content_hash = "hash1"
+        script.loading = "defer"
+        mock_extract.return_value = ([], [script])
+
+        mock_builder = mock.Mock()
+        mock_builder.build.return_value = "deferred();"
+        mock_get_builder.return_value = mock_builder
+
+        mock_get_setting.side_effect = lambda key: {
+            "JS_BUILDER": "wagtail_asset_publisher.builders.raw.RawAssetBuilder",
+            "OBFUSCATE_JS": False,
+            "HASH_LENGTH": 8,
+            "JS_PREFIX": "page-assets/js/",
+        }[key]
+
+        with (
+            mock.patch("wagtail_asset_publisher.models.PublishedAsset"),
+            mock.patch("wagtail_asset_publisher.utils._clear_js_assets"),
+        ):
+            _process_js(page, storage)
+
+        storage.save.assert_called_once_with(
+            "page-assets/js/42-fn123456-defer.js", "deferred();"
+        )
+
+    @mock.patch("wagtail_asset_publisher.utils.invalidate_cache")
+    @mock.patch(
+        "wagtail_asset_publisher.utils.compute_content_hash", return_value="fn123456"
+    )
+    @mock.patch("wagtail_asset_publisher.utils.extract_assets_from_page")
+    @mock.patch("wagtail_asset_publisher.utils.get_setting")
+    @mock.patch("wagtail_asset_publisher.utils.get_builder")
+    def test_filename_no_suffix_for_blocking(
+        self,
+        mock_get_builder,
+        mock_get_setting,
+        mock_extract,
+        mock_hash,
+        mock_invalidate,
+    ):
+        """blockingスクリプトのファイル名にloading suffixが付与されないことを検証する。
+
+        【目的】loading=""（blocking）のスクリプトのファイル名にサフィックスが
+               付与されないことをもって、後方互換性を保証する
+        【種別】正常系テスト
+        【対象】_process_js(page, storage) のファイル名生成
+        【技法】境界値分析（空文字のloading値）
+        【テストデータ】loading=""のスクリプト
+        """
+        page = mock.Mock(pk=42)
+        storage = mock.Mock()
+        storage.save.return_value = "/media/page-assets/js/42-fn123456.js"
+
+        script = mock.Mock()
+        script.content = "blocking();"
+        script.content_hash = "hash1"
+        script.loading = ""
+        mock_extract.return_value = ([], [script])
+
+        mock_builder = mock.Mock()
+        mock_builder.build.return_value = "blocking();"
+        mock_get_builder.return_value = mock_builder
+
+        mock_get_setting.side_effect = lambda key: {
+            "JS_BUILDER": "wagtail_asset_publisher.builders.raw.RawAssetBuilder",
+            "OBFUSCATE_JS": False,
+            "HASH_LENGTH": 8,
+            "JS_PREFIX": "page-assets/js/",
+        }[key]
+
+        with (
+            mock.patch("wagtail_asset_publisher.models.PublishedAsset"),
+            mock.patch("wagtail_asset_publisher.utils._clear_js_assets"),
+        ):
+            _process_js(page, storage)
+
+        storage.save.assert_called_once_with(
+            "page-assets/js/42-fn123456.js", "blocking();"
+        )
+
+    @mock.patch("wagtail_asset_publisher.utils.invalidate_cache")
+    @mock.patch(
+        "wagtail_asset_publisher.utils.compute_content_hash", return_value="mod12345"
+    )
+    @mock.patch("wagtail_asset_publisher.utils.extract_assets_from_page")
+    @mock.patch("wagtail_asset_publisher.utils.get_setting")
+    @mock.patch("wagtail_asset_publisher.utils.get_builder")
+    def test_update_or_create_receives_loading_value(
+        self,
+        mock_get_builder,
+        mock_get_setting,
+        mock_extract,
+        mock_hash,
+        mock_invalidate,
+    ):
+        """PublishedAsset.objects.update_or_createにloading値が渡されることを検証する。
+
+        【目的】_process_jsがPublishedAssetの作成/更新時にloading値を
+               正しく渡すことをもって、DB上のloading strategy記録要件を保証する
+        【種別】正常系テスト
+        【対象】_process_js(page, storage) -> PublishedAsset.objects.update_or_create
+        【技法】同値分割（loading値の伝搬）
+        【テストデータ】loading="module"のスクリプト
+        """
+        page = mock.Mock(pk=42)
+        storage = mock.Mock()
+        storage.save.return_value = "/media/page-assets/js/42-mod12345-module.js"
+
+        script = mock.Mock()
+        script.content = "import x from 'y';"
+        script.content_hash = "hash_module"
+        script.loading = "module"
+        mock_extract.return_value = ([], [script])
+
+        mock_builder = mock.Mock()
+        mock_builder.build.return_value = "import x from 'y';"
+        mock_get_builder.return_value = mock_builder
+
+        mock_get_setting.side_effect = lambda key: {
+            "JS_BUILDER": "wagtail_asset_publisher.builders.raw.RawAssetBuilder",
+            "OBFUSCATE_JS": False,
+            "HASH_LENGTH": 8,
+            "JS_PREFIX": "page-assets/js/",
+        }[key]
+
+        with (
+            mock.patch("wagtail_asset_publisher.models.PublishedAsset") as mock_pa,
+            mock.patch("wagtail_asset_publisher.utils._clear_js_assets"),
+        ):
+            _process_js(page, storage)
+
+            mock_pa.objects.update_or_create.assert_called_once_with(
+                page=page,
+                asset_type="js",
+                loading="module",
+                defaults={
+                    "url": "/media/page-assets/js/42-mod12345-module.js",
+                    "content_hashes": ["hash_module"],
+                },
+            )
+
+    @mock.patch("wagtail_asset_publisher.utils.invalidate_cache")
+    @mock.patch(
+        "wagtail_asset_publisher.utils.compute_content_hash", return_value="grp12345"
+    )
+    @mock.patch("wagtail_asset_publisher.utils.extract_assets_from_page")
+    @mock.patch("wagtail_asset_publisher.utils.get_setting")
+    @mock.patch("wagtail_asset_publisher.utils.get_builder")
+    def test_same_loading_scripts_grouped_together(
+        self,
+        mock_get_builder,
+        mock_get_setting,
+        mock_extract,
+        mock_hash,
+        mock_invalidate,
+    ):
+        """同じloading strategyのスクリプトが1つのファイルにまとめられることを検証する。
+
+        【目的】同じloading値を持つ複数のスクリプトが1つのビルド呼び出しに
+               まとめられることをもって、loading strategy別の結合要件を保証する
+        【種別】正常系テスト
+        【対象】_process_js(page, storage) のグループ化
+        【技法】同値分割（同一loading値の複数スクリプト）
+        【テストデータ】loading="defer"のスクリプト2つ
+        """
+        page = mock.Mock(pk=42)
+        storage = mock.Mock()
+        storage.save.return_value = "/media/page-assets/js/42-grp12345-defer.js"
+
+        script1 = mock.Mock()
+        script1.content = "deferred1();"
+        script1.content_hash = "hash1"
+        script1.loading = "defer"
+
+        script2 = mock.Mock()
+        script2.content = "deferred2();"
+        script2.content_hash = "hash2"
+        script2.loading = "defer"
+
+        mock_extract.return_value = ([], [script1, script2])
+
+        mock_builder = mock.Mock()
+        mock_builder.build.return_value = "deferred1();deferred2();"
+        mock_get_builder.return_value = mock_builder
+
+        mock_get_setting.side_effect = lambda key: {
+            "JS_BUILDER": "wagtail_asset_publisher.builders.raw.RawAssetBuilder",
+            "OBFUSCATE_JS": False,
+            "HASH_LENGTH": 8,
+            "JS_PREFIX": "page-assets/js/",
+        }[key]
+
+        with (
+            mock.patch("wagtail_asset_publisher.models.PublishedAsset") as mock_pa,
+            mock.patch("wagtail_asset_publisher.utils._clear_js_assets"),
+        ):
+            _process_js(page, storage)
+
+            mock_pa.objects.update_or_create.assert_called_once()
+
+        mock_builder.build.assert_called_once_with(
+            None, ["deferred1();", "deferred2();"], "js"
+        )
+        storage.save.assert_called_once()
+
+    @mock.patch("wagtail_asset_publisher.utils.invalidate_cache")
+    @mock.patch(
+        "wagtail_asset_publisher.utils.compute_content_hash", return_value="skip1234"
+    )
+    @mock.patch("wagtail_asset_publisher.utils.extract_assets_from_page")
+    @mock.patch("wagtail_asset_publisher.utils.get_setting")
+    @mock.patch("wagtail_asset_publisher.utils.get_builder")
+    def test_empty_build_result_skipped_for_group(
+        self,
+        mock_get_builder,
+        mock_get_setting,
+        mock_extract,
+        mock_hash,
+        mock_invalidate,
+    ):
+        """ビルド結果が空のグループはスキップされることを検証する。
+
+        【目的】builderが空文字列を返したloading groupがstorage.saveを
+               呼ばずスキップされることをもって、空ファイル生成防止要件を保証する
+        【種別】エッジケーステスト
+        【対象】_process_js(page, storage)
+        【技法】判定条件網羅（C1）- builder空結果分岐
+        【テストデータ】builderが空文字列を返すスクリプト
+        """
+        page = mock.Mock(pk=42)
+        storage = mock.Mock()
+
+        script = mock.Mock()
+        script.content = "empty_result();"
+        script.content_hash = "hash1"
+        script.loading = "defer"
+        mock_extract.return_value = ([], [script])
+
+        mock_builder = mock.Mock()
+        mock_builder.build.return_value = ""
+        mock_get_builder.return_value = mock_builder
+
+        mock_get_setting.side_effect = lambda key: {
+            "JS_BUILDER": "wagtail_asset_publisher.builders.raw.RawAssetBuilder",
+            "OBFUSCATE_JS": False,
+            "HASH_LENGTH": 8,
+            "JS_PREFIX": "page-assets/js/",
+        }[key]
+
+        with (
+            mock.patch("wagtail_asset_publisher.models.PublishedAsset") as mock_pa,
+            mock.patch("wagtail_asset_publisher.utils._clear_js_assets"),
+        ):
+            _process_js(page, storage)
+
+            mock_pa.objects.update_or_create.assert_not_called()
+
+        storage.save.assert_not_called()
+
+
+class TestClearJsAssets:
+    """Tests for _clear_js_assets: remove all JS published assets for a page."""
+
+    def test_deletes_all_js_assets_from_storage_and_db(self):
+        """_clear_js_assetsがページの全JSアセットをストレージとDBから削除することを検証する。
+
+        【目的】_clear_js_assetsが指定ページの全JSアセットについて、
+               ストレージファイル削除とDBレコード削除を行うことを保証する
+        【種別】正常系テスト
+        【対象】_clear_js_assets(page, storage)
+        【技法】命令網羅（C0）
+        【テストデータ】3つのloading strategyの既存JSアセット
+        """
+        page = mock.Mock(pk=42)
+        storage = mock.Mock()
+        storage.exists.return_value = True
+
+        asset_blocking = mock.Mock()
+        asset_blocking.url = "/media/page-assets/js/42-abc.js"
+        asset_blocking.loading = ""
+
+        asset_defer = mock.Mock()
+        asset_defer.url = "/media/page-assets/js/42-abc-defer.js"
+        asset_defer.loading = "defer"
+
+        asset_module = mock.Mock()
+        asset_module.url = "/media/page-assets/js/42-abc-module.js"
+        asset_module.loading = "module"
+
+        with (
+            mock.patch("wagtail_asset_publisher.models.PublishedAsset") as mock_pa,
+            mock.patch(
+                "wagtail_asset_publisher.utils._extract_path_from_url",
+                side_effect=lambda url: url.removeprefix("/media/"),
+            ),
+        ):
+            mock_pa.objects.filter.return_value = [
+                asset_blocking,
+                asset_defer,
+                asset_module,
+            ]
+            _clear_js_assets(page, storage)
+
+        assert storage.delete.call_count == 3
+        assert asset_blocking.delete.call_count == 1
+        assert asset_defer.delete.call_count == 1
+        assert asset_module.delete.call_count == 1
+
+    def test_no_existing_js_assets_is_noop(self):
+        """既存JSアセットがない場合、_clear_js_assetsがno-opであることを検証する。
+
+        【目的】JSアセットが存在しないページに対して_clear_js_assetsを呼んでも
+               エラーにならないことを保証する
+        【種別】エッジケーステスト
+        【対象】_clear_js_assets(page, storage)
+        【技法】境界値分析（空の結果セット）
+        【テストデータ】JSアセットなしのページ
+        """
+        page = mock.Mock(pk=42)
+        storage = mock.Mock()
+
+        with mock.patch("wagtail_asset_publisher.models.PublishedAsset") as mock_pa:
+            mock_pa.objects.filter.return_value = []
+            _clear_js_assets(page, storage)
+
+        storage.delete.assert_not_called()
+
+    def test_skips_storage_delete_when_path_empty(self):
+        """URLからパスが抽出できない場合、storage.deleteをスキップすることを検証する。
+
+        【目的】_extract_path_from_urlが空文字を返した場合でもDBレコードは
+               削除され、storage.deleteはスキップされることを保証する
+        【種別】エッジケーステスト
+        【対象】_clear_js_assets(page, storage)
+        【技法】判定条件網羅（C1）- 空パス分岐
+        【テストデータ】パース不可能なURLを持つアセット
+        """
+        page = mock.Mock(pk=42)
+        storage = mock.Mock()
+
+        asset = mock.Mock()
+        asset.url = "https://unknown.example.com/no-match.js"
+
+        with (
+            mock.patch("wagtail_asset_publisher.models.PublishedAsset") as mock_pa,
+            mock.patch(
+                "wagtail_asset_publisher.utils._extract_path_from_url",
+                return_value="",
+            ),
+        ):
+            mock_pa.objects.filter.return_value = [asset]
+            _clear_js_assets(page, storage)
+
+        storage.delete.assert_not_called()
+        asset.delete.assert_called_once()
+
+    def test_skips_storage_delete_when_file_not_exists(self):
+        """ストレージにファイルが存在しない場合、storage.deleteをスキップすることを検証する。
+
+        【目的】storage.exists()がFalseを返した場合にstorage.deleteが
+               呼ばれないことを保証する
+        【種別】エッジケーステスト
+        【対象】_clear_js_assets(page, storage)
+        【技法】判定条件網羅（C1）- ファイル不在分岐
+        【テストデータ】ストレージにファイルが存在しないアセット
+        """
+        page = mock.Mock(pk=42)
+        storage = mock.Mock()
+        storage.exists.return_value = False
+
+        asset = mock.Mock()
+        asset.url = "/media/page-assets/js/42-abc.js"
+
+        with (
+            mock.patch("wagtail_asset_publisher.models.PublishedAsset") as mock_pa,
+            mock.patch(
+                "wagtail_asset_publisher.utils._extract_path_from_url",
+                return_value="page-assets/js/42-abc.js",
+            ),
+        ):
+            mock_pa.objects.filter.return_value = [asset]
+            _clear_js_assets(page, storage)
+
+        storage.delete.assert_not_called()
+        asset.delete.assert_called_once()
 
 
 class TestClearAsset:
