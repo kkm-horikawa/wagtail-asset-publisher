@@ -6,7 +6,10 @@ Pipeline: Extract -> Build -> Publish -> Record
 from __future__ import annotations
 
 import logging
+import shutil
+import subprocess
 from importlib import import_module
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
@@ -49,6 +52,9 @@ def _process_css(page: Any, storage: Any) -> None:
         invalidate_cache(page.pk)
         return
 
+    if get_setting("MINIFY_CSS"):
+        built_css = _minify_css(built_css)
+
     css_hash = compute_content_hash(built_css, get_setting("HASH_LENGTH"))
     prefix = get_setting("CSS_PREFIX")
     filename = f"{prefix}{page.pk}-{css_hash}.css"
@@ -83,6 +89,9 @@ def _process_js(page: Any, storage: Any) -> None:
         invalidate_cache(page.pk)
         return
 
+    if get_setting("OBFUSCATE_JS"):
+        built_js = _optimize_js(built_js)
+
     js_hash = compute_content_hash(built_js, get_setting("HASH_LENGTH"))
     prefix = get_setting("JS_PREFIX")
     filename = f"{prefix}{page.pk}-{js_hash}.js"
@@ -98,6 +107,69 @@ def _process_js(page: Any, storage: Any) -> None:
     )
     logger.info("Published JS for page %d: %s", page.pk, url)
     invalidate_cache(page.pk)
+
+
+def _optimize_js(content: str) -> str:
+    """Optimize JS content using terser (preferred) or rjsmin (fallback).
+
+    Falls back gracefully if neither tool is available.
+    """
+    terser_path = _find_terser()
+    if terser_path is not None:
+        try:
+            result = subprocess.run(  # noqa: S603
+                [terser_path, *get_setting("TERSER_OPTIONS")],
+                input=content,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=True,
+            )
+            return result.stdout
+        except (
+            subprocess.CalledProcessError,
+            subprocess.TimeoutExpired,
+            OSError,
+        ) as e:
+            logger.warning("terser failed: %s. Falling back to rjsmin.", e)
+
+    try:
+        import rjsmin  # type: ignore[import-not-found]
+
+        return rjsmin.jsmin(content)  # type: ignore[no-any-return]
+    except ImportError:
+        logger.warning(
+            "Neither terser nor rjsmin is available. JS optimization skipped."
+        )
+        return content
+
+
+def _minify_css(content: str) -> str:
+    """Minify CSS content using rcssmin.
+
+    Falls back gracefully if rcssmin is not installed.
+    """
+    try:
+        import rcssmin  # type: ignore[import-not-found]
+
+        return rcssmin.cssmin(content)  # type: ignore[no-any-return]
+    except ImportError:
+        logger.warning("rcssmin is not installed. CSS minification skipped.")
+        return content
+
+
+def _find_terser() -> str | None:
+    """Find the terser CLI binary.
+
+    Search order: TERSER_PATH setting -> node_modules/.bin/terser -> PATH.
+    """
+    explicit = get_setting("TERSER_PATH")
+    if explicit:
+        return explicit  # type: ignore[no-any-return]
+    local = Path("node_modules/.bin/terser")
+    if local.exists():
+        return str(local)
+    return shutil.which("terser")
 
 
 def _clear_asset(page: Any, asset_type: str, storage: Any) -> None:

@@ -44,6 +44,11 @@ Changelog = "https://github.com/kkm-horikawa/wagtail-asset-publisher/releases"
 tailwind = [
     "django-tailwind-cli>=2.0",
 ]
+minify = [
+    "minify-html>=0.16",
+    "rcssmin>=1.2",
+    "rjsmin>=1.2",
+]
 dev = [
     "pytest>=8.0",
     "pytest-django>=4.8",
