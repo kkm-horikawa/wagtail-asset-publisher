@@ -173,8 +173,8 @@ class TestGetPublishedAssets:
 
     @mock.patch("wagtail_asset_publisher.middleware.cache")
     @mock.patch("wagtail_asset_publisher.models.PublishedAsset")
-    def test_queries_db_on_cache_miss(self, MockPublishedAsset, mock_cache):
-        """Queries DB and populates cache on cache miss.
+    def test_queries_db_on_cache_miss_css(self, MockPublishedAsset, mock_cache):
+        """Queries DB and populates cache on cache miss (CSS).
 
         Purpose: Verify that a cache miss triggers a DB lookup and the
             result is cached for subsequent requests.
@@ -199,6 +199,35 @@ class TestGetPublishedAssets:
         mock_cache.set.assert_called_once_with(
             f"{CACHE_KEY_PREFIX}42", result, CACHE_TIMEOUT
         )
+
+    @mock.patch("wagtail_asset_publisher.middleware.cache")
+    @mock.patch("wagtail_asset_publisher.models.PublishedAsset")
+    def test_queries_db_on_cache_miss_js(self, MockPublishedAsset, mock_cache):
+        """Queries DB and populates cache on cache miss (JS as list).
+
+        Purpose: Verify that JS assets are returned as a list of per-loading
+            entries when fetched from the DB on cache miss.
+        Category: Normal case
+        Target: _get_published_assets(page_id)
+        Technique: Equivalence partitioning (cache miss, JS structure)
+        Test data: Empty cache, one JS asset in DB
+        """
+        mock_cache.get.return_value = None
+
+        mock_asset = mock.Mock()
+        mock_asset.asset_type = "js"
+        mock_asset.url = "https://cdn/b.js"
+        mock_asset.content_hashes = ["jshash1"]
+        mock_asset.loading = "defer"
+        MockPublishedAsset.objects.filter.return_value = [mock_asset]
+
+        result = _get_published_assets(42)
+
+        assert "js" in result
+        assert isinstance(result["js"], list)
+        assert len(result["js"]) == 1
+        assert result["js"][0]["url"] == "https://cdn/b.js"
+        assert result["js"][0]["loading"] == "defer"
 
     @mock.patch("wagtail_asset_publisher.middleware.cache")
     @mock.patch("wagtail_asset_publisher.models.PublishedAsset")
@@ -253,14 +282,17 @@ class TestProcessHtml:
         Category: Normal case
         Target: _process_html(html, assets)
         Technique: Equivalence partitioning
-        Test data: Full HTML with </body> and JS asset
+        Test data: Full HTML with </body> and JS asset (list format)
         """
         html = "<html><head></head><body><p>Hi</p></body></html>"
         assets = {
-            "js": {
-                "url": "https://cdn/page.js",
-                "content_hashes": set(),
-            },
+            "js": [
+                {
+                    "url": "https://cdn/page.js",
+                    "content_hashes": set(),
+                    "loading": "",
+                },
+            ],
         }
 
         result = _process_html(html, assets)
@@ -280,7 +312,13 @@ class TestProcessHtml:
         html = "<html><head></head><body></body></html>"
         assets = {
             "css": {"url": "https://cdn/p.css", "content_hashes": set()},
-            "js": {"url": "https://cdn/p.js", "content_hashes": set()},
+            "js": [
+                {
+                    "url": "https://cdn/p.js",
+                    "content_hashes": set(),
+                    "loading": "",
+                },
+            ],
         }
 
         result = _process_html(html, assets)

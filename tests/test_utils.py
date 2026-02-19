@@ -238,7 +238,7 @@ class TestProcessJs:
         Category: Normal case
         Target: _process_js(page, storage)
         Technique: Statement coverage (C0)
-        Test data: Page with one extracted script block
+        Test data: Page with one extracted script block (blocking loading)
         """
         page = mock.Mock(pk=42)
         storage = mock.Mock()
@@ -247,6 +247,7 @@ class TestProcessJs:
         script = mock.Mock()
         script.content = "console.log('hello');"
         script.content_hash = "jshash1"
+        script.loading = ""
         mock_extract.return_value = ([], [script])
 
         mock_builder = mock.Mock()
@@ -262,7 +263,7 @@ class TestProcessJs:
 
         with (
             mock.patch("wagtail_asset_publisher.models.PublishedAsset") as mock_pa,
-            mock.patch("wagtail_asset_publisher.utils._clear_asset"),
+            mock.patch("wagtail_asset_publisher.utils._clear_js_assets"),
         ):
             _process_js(page, storage)
 
@@ -277,7 +278,7 @@ class TestProcessJs:
         mock_invalidate.assert_called_with(42)
 
     @mock.patch("wagtail_asset_publisher.utils.invalidate_cache")
-    @mock.patch("wagtail_asset_publisher.utils._clear_asset")
+    @mock.patch("wagtail_asset_publisher.utils._clear_js_assets")
     @mock.patch("wagtail_asset_publisher.utils.extract_assets_from_page")
     @mock.patch("wagtail_asset_publisher.utils.get_setting")
     @mock.patch("wagtail_asset_publisher.utils.get_builder")
@@ -289,13 +290,13 @@ class TestProcessJs:
         mock_clear,
         mock_invalidate,
     ):
-        """When no scripts are extracted, existing JS asset is cleared.
+        """When no scripts are extracted, all existing JS assets are cleared.
 
-        Purpose: Verify that _process_js clears the existing asset when
-                 the builder returns empty content.
+        Purpose: Verify that _process_js clears all existing JS assets when
+                 no scripts are extracted from the page.
         Category: Edge case
         Target: _process_js(page, storage)
-        Technique: Decision coverage (C1) - empty build result branch
+        Technique: Decision coverage (C1) - empty extraction branch
         Test data: Page with no extracted scripts
         """
         page = mock.Mock(pk=42)
@@ -313,7 +314,7 @@ class TestProcessJs:
 
         _process_js(page, storage)
 
-        mock_clear.assert_called_once_with(page, "js", storage)
+        mock_clear.assert_called_once_with(page, storage)
         storage.save.assert_not_called()
         mock_invalidate.assert_called_with(42)
 
@@ -1282,6 +1283,7 @@ class TestProcessJsOptimization:
         script = mock.Mock()
         script.content = "var  a  =  1;"
         script.content_hash = "jshash1"
+        script.loading = ""
         mock_extract.return_value = ([], [script])
 
         mock_builder = mock.Mock()
@@ -1297,7 +1299,7 @@ class TestProcessJsOptimization:
 
         with (
             mock.patch("wagtail_asset_publisher.models.PublishedAsset"),
-            mock.patch("wagtail_asset_publisher.utils._clear_asset"),
+            mock.patch("wagtail_asset_publisher.utils._clear_js_assets"),
         ):
             _process_js(page, storage)
 
@@ -1336,6 +1338,7 @@ class TestProcessJsOptimization:
         script = mock.Mock()
         script.content = "console.log('hello');"
         script.content_hash = "jshash1"
+        script.loading = ""
         mock_extract.return_value = ([], [script])
 
         mock_builder = mock.Mock()
@@ -1351,7 +1354,7 @@ class TestProcessJsOptimization:
 
         with (
             mock.patch("wagtail_asset_publisher.models.PublishedAsset"),
-            mock.patch("wagtail_asset_publisher.utils._clear_asset"),
+            mock.patch("wagtail_asset_publisher.utils._clear_js_assets"),
         ):
             _process_js(page, storage)
 
