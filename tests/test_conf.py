@@ -189,6 +189,10 @@ class TestDefaultValues:
             "TAILWIND_CLI_PATH",
             "TAILWIND_CONFIG",
             "TAILWIND_BASE_CSS",
+            "OBFUSCATE_JS",
+            "MINIFY_CSS",
+            "TERSER_PATH",
+            "TERSER_OPTIONS",
         }
 
         assert required_keys.issubset(set(DEFAULTS.keys()))
