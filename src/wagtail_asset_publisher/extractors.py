@@ -15,15 +15,20 @@ class ExtractedAsset(NamedTuple):
     loading: str = ""  # "", "defer", "async", "module", "module-async"
 
 
+_JS_MIME_TYPES = frozenset(
+    {
+        "text/javascript",
+        "application/javascript",
+    }
+)
+
+
 class AssetExtractor(HTMLParser):
     """HTML parser that extracts inline <style> and <script> tags.
 
     Respects the ``data-no-extract`` attribute: tags with this attribute
     are left inline and not extracted.
     """
-
-    # Non-JS script types that should never be extracted.
-    _NON_JS_TYPES = frozenset({"importmap", "speculationrules"})
 
     def __init__(self) -> None:
         super().__init__()
@@ -110,7 +115,13 @@ class AssetExtractor(HTMLParser):
         """
         type_attr = (attr_dict.get("type") or "").strip().lower()
 
-        if type_attr and type_attr not in ("text/javascript", "module"):
+        if not type_attr:
+            pass  # missing/empty type → normal JS
+        elif type_attr == "module":
+            pass  # handled below
+        elif type_attr in _JS_MIME_TYPES:
+            pass  # explicit MIME type → still normal JS
+        else:
             # Non-JS type (importmap, speculationrules, etc.) -- skip extraction
             self._skip_current = True
             return ""
