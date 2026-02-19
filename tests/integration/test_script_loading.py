@@ -66,20 +66,19 @@ class TestFullPipelineMixedStrategies:
     def test_mixed_strategies_create_separate_records(self, wagtail_page):
         """Mixed script loading strategies create separate PublishedAsset records per group.
 
-        【目的】blocking, defer, async, module, module-async の5種類のscriptを含むページを
-               ビルドした際、それぞれ独立したPublishedAssetレコードが作成され、
-               loadingフィールドに正しい戦略値が保存されることを保証する
-        【種別】正常系
-        【技法】モデルライフサイクル
-        【連携対象】build_page_assets → _process_js → RawAssetBuilder → DjangoStorageBackend → PublishedAsset
-        【テストデータ】
-        - 5種類のloading strategy（blocking, defer, async, module, module-async）
-        - 各1スクリプトずつ
-        【検証シナリオ】
-        1. 5種類のloading strategyを持つscriptを抽出結果として注入
-        2. build_page_assetsを実行
-        3. 5つのJS PublishedAssetレコードが作成されていることを確認
-        4. 各レコードのloadingフィールドが正しいことを確認
+        Purpose: Verify that building a page with 5 loading strategies (blocking,
+            defer, async, module, module-async) creates separate PublishedAsset
+            records with the correct loading field value for each.
+        Category: Normal case
+        Target: build_page_assets -> _process_js -> PublishedAsset
+        Technique: Model lifecycle
+        Integration targets: build_page_assets -> _process_js -> RawAssetBuilder -> DjangoStorageBackend -> PublishedAsset
+        Test data: Five scripts, one per loading strategy
+        Verification scenario:
+            1. Inject 5 scripts with different loading strategies as extraction results
+            2. Execute build_page_assets
+            3. Confirm 5 JS PublishedAsset records are created
+            4. Confirm each record has the correct loading field value
         """
         scripts = [
             _asset(JS_BLOCKING, ""),
@@ -106,17 +105,17 @@ class TestFullPipelineMixedStrategies:
     def test_each_strategy_has_correct_content_hashes(self, wagtail_page):
         """Each PublishedAsset stores the content hash of scripts in its loading group.
 
-        【目的】ビルド後のPublishedAssetレコードのcontent_hashesフィールドに、
-               当該グループのスクリプトのハッシュのみが含まれることを保証する
-        【種別】正常系
-        【技法】モデルライフサイクル
-        【連携対象】build_page_assets → grouping → PublishedAsset.content_hashes
-        【テストデータ】
-        - blocking scriptとdefer scriptの2種類
-        【検証シナリオ】
-        1. blocking, deferのscriptを注入してビルド
-        2. blockingレコードにはblocking scriptのハッシュのみ含まれることを確認
-        3. deferレコードにはdefer scriptのハッシュのみ含まれることを確認
+        Purpose: Verify that each PublishedAsset record's content_hashes field
+            contains only the hashes of scripts belonging to that loading group.
+        Category: Normal case
+        Target: build_page_assets -> grouping -> PublishedAsset.content_hashes
+        Technique: Model lifecycle
+        Integration targets: build_page_assets -> grouping -> PublishedAsset.content_hashes
+        Test data: Two scripts: blocking and defer
+        Verification scenario:
+            1. Inject blocking and defer scripts and build
+            2. Confirm blocking record contains only the blocking script hash
+            3. Confirm defer record contains only the defer script hash
         """
         scripts = [
             _asset(JS_BLOCKING, ""),
@@ -144,17 +143,17 @@ class TestFullPipelineMixedStrategies:
     def test_loading_suffix_in_filename(self, wagtail_page):
         """Non-empty loading strategy is included as filename suffix.
 
-        【目的】defer等の非空loading strategyがファイル名のサフィックスとして
-               URL内に反映されることを保証する
-        【種別】正常系
-        【技法】モデルライフサイクル
-        【連携対象】build_page_assets → filename generation → DjangoStorageBackend → PublishedAsset.url
-        【テストデータ】
-        - blocking script（loadingなし）とdefer scriptの2種類
-        【検証シナリオ】
-        1. blocking, deferのscriptを注入してビルド
-        2. blockingレコードのURLに「-defer」が含まれないことを確認
-        3. deferレコードのURLに「-defer」サフィックスが含まれることを確認
+        Purpose: Verify that non-empty loading strategies such as "defer"
+            are reflected as a suffix in the asset URL filename.
+        Category: Normal case
+        Target: build_page_assets -> filename generation -> PublishedAsset.url
+        Technique: Model lifecycle
+        Integration targets: build_page_assets -> filename generation -> DjangoStorageBackend -> PublishedAsset.url
+        Test data: Two scripts: blocking (no loading) and defer
+        Verification scenario:
+            1. Inject blocking and defer scripts and build
+            2. Confirm blocking record URL does not contain "-defer"
+            3. Confirm defer record URL contains the "-defer" suffix
         """
         scripts = [
             _asset(JS_BLOCKING, ""),
@@ -181,17 +180,18 @@ class TestFullPipelineMixedStrategies:
     def test_multiple_scripts_same_strategy_merged(self, wagtail_page):
         """Multiple scripts with the same loading strategy are merged into one record.
 
-        【目的】同じloading strategyを持つ複数スクリプトが1つのPublishedAssetレコードに
-               まとめられ、content_hashesに全スクリプトのハッシュが含まれることを保証する
-        【種別】正常系
-        【技法】モデルライフサイクル
-        【連携対象】build_page_assets → grouping → RawAssetBuilder.build → PublishedAsset
-        【テストデータ】
-        - 同一loading strategy（defer）の2スクリプト
-        【検証シナリオ】
-        1. defer strategyの2スクリプトを注入してビルド
-        2. JS PublishedAssetレコードが1つだけ作成されることを確認
-        3. content_hashesに両方のスクリプトのハッシュが含まれることを確認
+        Purpose: Verify that multiple scripts sharing the same loading strategy
+            are merged into a single PublishedAsset record, with content_hashes
+            containing hashes of all scripts in the group.
+        Category: Normal case
+        Target: build_page_assets -> grouping -> PublishedAsset
+        Technique: Model lifecycle
+        Integration targets: build_page_assets -> grouping -> RawAssetBuilder.build -> PublishedAsset
+        Test data: Two scripts with the same loading strategy (defer)
+        Verification scenario:
+            1. Inject two defer strategy scripts and build
+            2. Confirm only one JS PublishedAsset record is created
+            3. Confirm content_hashes contains hashes for both scripts
         """
         defer_a = "console.log('a');"
         defer_b = "console.log('b');"
@@ -222,17 +222,17 @@ class TestMiddlewareScriptInjection:
     def test_defer_script_injected_with_defer_attribute(self, wagtail_page):
         """Middleware injects <script defer> for defer-loaded assets.
 
-        【目的】deferスクリプトがPublishedAssetとして保存された後、ミドルウェアが
-               レスポンスHTMLに<script defer>タグを注入することを保証する
-        【種別】正常系
-        【技法】ミドルウェア動作
-        【連携対象】build_page_assets → PublishedAsset → _get_published_assets → _process_html
-        【テストデータ】
-        - defer loading strategyの1スクリプト
-        【検証シナリオ】
-        1. defer scriptをビルドしてPublishedAssetを作成
-        2. _process_htmlでHTML変換を実行
-        3. 出力HTMLに<script src="..." defer>タグが含まれることを確認
+        Purpose: Verify that after a defer script is saved as a PublishedAsset,
+            the middleware injects a <script defer> tag into the response HTML.
+        Category: Normal case
+        Target: build_page_assets -> _process_html
+        Technique: Middleware behavior
+        Integration targets: build_page_assets -> PublishedAsset -> _get_published_assets -> _process_html
+        Test data: One script with defer loading strategy
+        Verification scenario:
+            1. Build a defer script to create a PublishedAsset
+            2. Run _process_html to transform the HTML
+            3. Confirm the output HTML contains a <script src="..." defer> tag
         """
         scripts = [_asset(JS_DEFER, "defer")]
         with mock.patch(
@@ -254,17 +254,17 @@ class TestMiddlewareScriptInjection:
     def test_async_script_injected_with_async_attribute(self, wagtail_page):
         """Middleware injects <script async> for async-loaded assets.
 
-        【目的】asyncスクリプトがPublishedAssetとして保存された後、ミドルウェアが
-               レスポンスHTMLに<script async>タグを注入することを保証する
-        【種別】正常系
-        【技法】ミドルウェア動作
-        【連携対象】build_page_assets → PublishedAsset → _get_published_assets → _process_html
-        【テストデータ】
-        - async loading strategyの1スクリプト
-        【検証シナリオ】
-        1. async scriptをビルドしてPublishedAssetを作成
-        2. _process_htmlでHTML変換を実行
-        3. 出力HTMLに<script src="..." async>タグが含まれることを確認
+        Purpose: Verify that after an async script is saved as a PublishedAsset,
+            the middleware injects a <script async> tag into the response HTML.
+        Category: Normal case
+        Target: build_page_assets -> _process_html
+        Technique: Middleware behavior
+        Integration targets: build_page_assets -> PublishedAsset -> _get_published_assets -> _process_html
+        Test data: One script with async loading strategy
+        Verification scenario:
+            1. Build an async script to create a PublishedAsset
+            2. Run _process_html to transform the HTML
+            3. Confirm the output HTML contains a <script src="..." async> tag
         """
         scripts = [_asset(JS_ASYNC, "async")]
         with mock.patch(
@@ -286,17 +286,17 @@ class TestMiddlewareScriptInjection:
     def test_module_script_injected_with_type_module(self, wagtail_page):
         """Middleware injects <script type="module"> for module-loaded assets.
 
-        【目的】moduleスクリプトがPublishedAssetとして保存された後、ミドルウェアが
-               レスポンスHTMLに<script type="module">タグを注入することを保証する
-        【種別】正常系
-        【技法】ミドルウェア動作
-        【連携対象】build_page_assets → PublishedAsset → _get_published_assets → _process_html
-        【テストデータ】
-        - module loading strategyの1スクリプト
-        【検証シナリオ】
-        1. module scriptをビルドしてPublishedAssetを作成
-        2. _process_htmlでHTML変換を実行
-        3. 出力HTMLに<script src="..." type="module">タグが含まれることを確認
+        Purpose: Verify that after a module script is saved as a PublishedAsset,
+            the middleware injects a <script type="module"> tag into the response HTML.
+        Category: Normal case
+        Target: build_page_assets -> _process_html
+        Technique: Middleware behavior
+        Integration targets: build_page_assets -> PublishedAsset -> _get_published_assets -> _process_html
+        Test data: One script with module loading strategy
+        Verification scenario:
+            1. Build a module script to create a PublishedAsset
+            2. Run _process_html to transform the HTML
+            3. Confirm the output HTML contains a <script src="..." type="module"> tag
         """
         scripts = [_asset(JS_MODULE, "module")]
         with mock.patch(
@@ -318,17 +318,17 @@ class TestMiddlewareScriptInjection:
     def test_module_async_script_injected_with_type_module_async(self, wagtail_page):
         """Middleware injects <script type="module" async> for module-async assets.
 
-        【目的】module-asyncスクリプトがPublishedAssetとして保存された後、ミドルウェアが
-               レスポンスHTMLに<script type="module" async>タグを注入することを保証する
-        【種別】正常系
-        【技法】ミドルウェア動作
-        【連携対象】build_page_assets → PublishedAsset → _get_published_assets → _process_html
-        【テストデータ】
-        - module-async loading strategyの1スクリプト
-        【検証シナリオ】
-        1. module-async scriptをビルドしてPublishedAssetを作成
-        2. _process_htmlでHTML変換を実行
-        3. 出力HTMLにtype="module"とasync属性の両方が含まれることを確認
+        Purpose: Verify that after a module-async script is saved as a PublishedAsset,
+            the middleware injects a <script type="module" async> tag into the response HTML.
+        Category: Normal case
+        Target: build_page_assets -> _process_html
+        Technique: Middleware behavior
+        Integration targets: build_page_assets -> PublishedAsset -> _get_published_assets -> _process_html
+        Test data: One script with module-async loading strategy
+        Verification scenario:
+            1. Build a module-async script to create a PublishedAsset
+            2. Run _process_html to transform the HTML
+            3. Confirm the output HTML contains both type="module" and async attributes
         """
         scripts = [_asset(JS_MODULE_ASYNC, "module-async")]
         with mock.patch(
@@ -349,18 +349,18 @@ class TestMiddlewareScriptInjection:
     def test_blocking_script_injected_without_extra_attributes(self, wagtail_page):
         """Middleware injects plain <script> without extra attributes for blocking assets.
 
-        【目的】blocking（loading=""）スクリプトがPublishedAssetとして保存された後、
-               ミドルウェアがdefer/async/type属性なしのプレーンな<script>タグを
-               注入することを保証する
-        【種別】正常系
-        【技法】ミドルウェア動作
-        【連携対象】build_page_assets → PublishedAsset → _get_published_assets → _process_html
-        【テストデータ】
-        - blocking（空文字loading strategy）の1スクリプト
-        【検証シナリオ】
-        1. blocking scriptをビルドしてPublishedAssetを作成
-        2. _process_htmlでHTML変換を実行
-        3. 出力HTMLのscriptタグにdefer/async/type属性が含まれないことを確認
+        Purpose: Verify that after a blocking (loading="") script is saved as a
+            PublishedAsset, the middleware injects a plain <script> tag without
+            defer, async, or type attributes.
+        Category: Normal case
+        Target: build_page_assets -> _process_html
+        Technique: Middleware behavior
+        Integration targets: build_page_assets -> PublishedAsset -> _get_published_assets -> _process_html
+        Test data: One script with empty loading strategy (blocking)
+        Verification scenario:
+            1. Build a blocking script to create a PublishedAsset
+            2. Run _process_html to transform the HTML
+            3. Confirm the output script tag has no defer/async/type attributes
         """
         scripts = [_asset(JS_BLOCKING, "")]
         with mock.patch(
@@ -385,18 +385,18 @@ class TestMiddlewareScriptInjection:
     def test_mixed_strategies_injection_order(self, wagtail_page):
         """Script tags are injected in the defined order: blocking, defer, module, async, module-async.
 
-        【目的】複数のloading strategyが存在する場合、ミドルウェアが定義された順序
-               （blocking → defer → module → async → module-async）で
-               scriptタグを注入することを保証する
-        【種別】正常系
-        【技法】ミドルウェア動作
-        【連携対象】build_page_assets → PublishedAsset → _process_html → _JS_LOADING_ORDER
-        【テストデータ】
-        - blocking, defer, async, module, module-asyncの5種類のスクリプト
-        【検証シナリオ】
-        1. 5種類のloading strategyのscriptをビルドしてPublishedAssetを作成
-        2. _process_htmlでHTML変換を実行
-        3. 出力HTMLでscriptタグの順序が定義された順序に従うことを確認
+        Purpose: Verify that when multiple loading strategies are present,
+            the middleware injects script tags in the defined order:
+            blocking -> defer -> module -> async -> module-async.
+        Category: Normal case
+        Target: build_page_assets -> _process_html -> _JS_LOADING_ORDER
+        Technique: Middleware behavior
+        Integration targets: build_page_assets -> PublishedAsset -> _process_html -> _JS_LOADING_ORDER
+        Test data: Five scripts: blocking, defer, async, module, module-async
+        Verification scenario:
+            1. Build 5 loading strategy scripts to create PublishedAssets
+            2. Run _process_html to transform the HTML
+            3. Confirm the script tag order in the output follows the defined order
         """
         scripts = [
             _asset(JS_BLOCKING, ""),
@@ -429,18 +429,19 @@ class TestMiddlewareScriptInjection:
     def test_inline_scripts_stripped_and_external_preserved(self, wagtail_page):
         """Matching inline scripts are stripped; static file references injected before </body>.
 
-        【目的】ミドルウェアが、PublishedAssetのcontent_hashesと一致するインラインscriptを
-               除去し、外部ファイル参照を</body>前に注入することを保証する
-        【種別】正常系
-        【技法】ミドルウェア動作
-        【連携対象】build_page_assets → _strip_matching_tags → _process_html
-        【テストデータ】
-        - defer scriptの内容をインラインHTMLに含むページ
-        【検証シナリオ】
-        1. defer scriptをビルド
-        2. _process_htmlでインラインscriptを含むHTMLを変換
-        3. インラインscript内容が除去されていることを確認
-        4. 外部ファイル参照scriptタグが注入されていることを確認
+        Purpose: Verify that the middleware strips inline scripts whose content
+            hash matches a PublishedAsset and injects external file references
+            before </body>.
+        Category: Normal case
+        Target: build_page_assets -> _strip_matching_tags -> _process_html
+        Technique: Middleware behavior
+        Integration targets: build_page_assets -> _strip_matching_tags -> _process_html
+        Test data: Page with inline HTML containing the defer script content
+        Verification scenario:
+            1. Build a defer script
+            2. Run _process_html on HTML containing the inline script
+            3. Confirm the inline script content is stripped
+            4. Confirm an external file reference script tag is injected
         """
         scripts = [_asset(JS_DEFER, "defer")]
         with mock.patch(
@@ -473,18 +474,20 @@ class TestRepublishUpdate:
     def test_republish_clears_old_js_assets_and_creates_new(self, wagtail_page):
         """Republishing with different scripts replaces all JS PublishedAsset records.
 
-        【目的】ページ内容を変更して再ビルドした際、古いJS PublishedAssetレコードが
-               全て削除され、新しいスクリプトに対応するレコードのみ残ることを保証する
-        【種別】正常系
-        【技法】モデルライフサイクル
-        【連携対象】build_page_assets → _clear_js_assets → _process_js → PublishedAsset
-        【テストデータ】
-        - 初回ビルド: blocking + defer の2スクリプト
-        - 再ビルド: async の1スクリプトのみ
-        【検証シナリオ】
-        1. blocking + defer scriptでビルド → 2レコード作成
-        2. async scriptのみで再ビルド → 古い2レコードが削除、asyncの1レコードのみ残存
-        3. loading="async"のレコードのみ存在することを確認
+        Purpose: Verify that when page content changes and is rebuilt, all old
+            JS PublishedAsset records are deleted and only records for the new
+            scripts remain.
+        Category: Normal case
+        Target: build_page_assets -> _clear_js_assets -> _process_js -> PublishedAsset
+        Technique: Model lifecycle
+        Integration targets: build_page_assets -> _clear_js_assets -> _process_js -> PublishedAsset
+        Test data:
+            - First build: blocking + defer (2 scripts)
+            - Rebuild: async only (1 script)
+        Verification scenario:
+            1. Build with blocking + defer scripts -> 2 records created
+            2. Rebuild with async script only -> old 2 records deleted, only async record remains
+            3. Confirm only the loading="async" record exists
         """
         scripts_v1 = [
             _asset(JS_BLOCKING, ""),
@@ -516,17 +519,18 @@ class TestRepublishUpdate:
     def test_republish_with_no_js_clears_all_js_records(self, wagtail_page):
         """Republishing with no scripts removes all JS PublishedAsset records.
 
-        【目的】スクリプトのないページに変更して再ビルドした際、
-               全てのJS PublishedAssetレコードが削除されることを保証する
-        【種別】正常系
-        【技法】モデルライフサイクル
-        【連携対象】build_page_assets → _clear_js_assets → PublishedAsset.delete
-        【テストデータ】
-        - 初回ビルド: defer + module の2スクリプト
-        - 再ビルド: スクリプトなし
-        【検証シナリオ】
-        1. defer + module scriptでビルド → 2レコード作成
-        2. スクリプトなしで再ビルド → 全レコード削除
+        Purpose: Verify that when a page is rebuilt without any scripts,
+            all existing JS PublishedAsset records are deleted.
+        Category: Normal case
+        Target: build_page_assets -> _clear_js_assets -> PublishedAsset.delete
+        Technique: Model lifecycle
+        Integration targets: build_page_assets -> _clear_js_assets -> PublishedAsset.delete
+        Test data:
+            - First build: defer + module (2 scripts)
+            - Rebuild: no scripts
+        Verification scenario:
+            1. Build with defer + module scripts -> 2 records created
+            2. Rebuild with no scripts -> all records deleted
         """
         scripts = [
             _asset(JS_DEFER, "defer"),
@@ -558,18 +562,18 @@ class TestRepublishUpdate:
     def test_republish_preserves_css_when_only_js_changes(self, wagtail_page):
         """CSS asset is preserved when only JS content changes on republish.
 
-        【目的】JS内容だけが変更された再ビルドで、CSS PublishedAssetが影響を受けず
-               そのまま維持されることを保証する
-        【種別】正常系
-        【技法】モデルライフサイクル
-        【連携対象】build_page_assets → _process_css + _process_js → PublishedAsset
-        【テストデータ】
-        - CSS + defer JS でビルド後、CSS + async JS で再ビルド
-        【検証シナリオ】
-        1. CSS + defer JSでビルド
-        2. CSS + async JSで再ビルド
-        3. CSS PublishedAssetが維持されていることを確認
-        4. JS PublishedAssetがasyncのみに変更されていることを確認
+        Purpose: Verify that when only JS content changes on rebuild, the CSS
+            PublishedAsset is not affected and remains intact.
+        Category: Normal case
+        Target: build_page_assets -> _process_css + _process_js -> PublishedAsset
+        Technique: Model lifecycle
+        Integration targets: build_page_assets -> _process_css + _process_js -> PublishedAsset
+        Test data: Build with CSS + defer JS, then rebuild with CSS + async JS
+        Verification scenario:
+            1. Build with CSS + defer JS
+            2. Rebuild with CSS + async JS
+            3. Confirm CSS PublishedAsset is preserved
+            4. Confirm JS PublishedAsset has changed to async only
         """
         css_asset = ExtractedAsset(
             content="body { color: red; }",
@@ -608,17 +612,17 @@ class TestNonJsTypeExclusion:
     def test_importmap_not_extracted_stays_inline(self, wagtail_page):
         """Scripts with type="importmap" are skipped by extraction and stay inline.
 
-        【目的】type="importmap"のscriptタグが抽出対象から除外され、
-               PublishedAssetレコードが作成されないことを保証する
-        【種別】正常系
-        【技法】APIエンドポイント
-        【連携対象】extract_assets → _resolve_loading_strategy → build_page_assets
-        【テストデータ】
-        - type="importmap"スクリプト1つのみのページ
-        【検証シナリオ】
-        1. importmap scriptのみを含むHTMLから抽出を実行
-        2. 抽出結果が空であることを確認（extractorがスキップ）
-        3. build_page_assetsを実行してもJS PublishedAssetが作成されないことを確認
+        Purpose: Verify that script tags with type="importmap" are excluded from
+            extraction and no PublishedAsset record is created for them.
+        Category: Normal case
+        Target: extract_assets -> build_page_assets
+        Technique: API endpoint
+        Integration targets: extract_assets -> _resolve_loading_strategy -> build_page_assets
+        Test data: Page with only one type="importmap" script
+        Verification scenario:
+            1. Run extraction on HTML containing only an importmap script
+            2. Confirm the extraction result is empty (extractor skips it)
+            3. Confirm build_page_assets does not create any JS PublishedAsset
         """
         from wagtail_asset_publisher.extractors import extract_assets
 
@@ -642,15 +646,16 @@ class TestNonJsTypeExclusion:
     def test_speculationrules_not_extracted(self, wagtail_page):
         """Scripts with type="speculationrules" are skipped by extraction.
 
-        【目的】type="speculationrules"のscriptタグが抽出対象から除外されることを保証する
-        【種別】正常系
-        【技法】APIエンドポイント
-        【連携対象】extract_assets → _resolve_loading_strategy
-        【テストデータ】
-        - type="speculationrules"スクリプト1つ
-        【検証シナリオ】
-        1. speculationrules scriptを含むHTMLから抽出を実行
-        2. 抽出結果が空であることを確認
+        Purpose: Verify that script tags with type="speculationrules" are
+            excluded from extraction.
+        Category: Normal case
+        Target: extract_assets -> _resolve_loading_strategy
+        Technique: API endpoint
+        Integration targets: extract_assets -> _resolve_loading_strategy
+        Test data: One script with type="speculationrules"
+        Verification scenario:
+            1. Run extraction on HTML containing a speculationrules script
+            2. Confirm the extraction result is empty
         """
         from wagtail_asset_publisher.extractors import extract_assets
 
@@ -666,17 +671,18 @@ class TestNonJsTypeExclusion:
     def test_importmap_alongside_normal_js_only_normal_extracted(self, wagtail_page):
         """When importmap and normal JS coexist, only normal JS is extracted.
 
-        【目的】importmapと通常JSが同じページに存在する場合、通常JSのみが
-               抽出・ビルドされ、importmapはインラインのまま残ることを保証する
-        【種別】正常系
-        【技法】モデルライフサイクル
-        【連携対象】extract_assets → build_page_assets → PublishedAsset
-        【テストデータ】
-        - type="importmap"スクリプトと通常のdeferスクリプトの2つ
-        【検証シナリオ】
-        1. importmap + defer scriptを含むHTMLから抽出
-        2. 抽出結果がdefer scriptの1つのみであることを確認
-        3. build_page_assetsを実行してdefer JS PublishedAssetのみ作成されることを確認
+        Purpose: Verify that when importmap and normal JS scripts coexist on a
+            page, only the normal JS is extracted and built, while the importmap
+            stays inline.
+        Category: Normal case
+        Target: extract_assets -> build_page_assets -> PublishedAsset
+        Technique: Model lifecycle
+        Integration targets: extract_assets -> build_page_assets -> PublishedAsset
+        Test data: One type="importmap" script and one normal defer script
+        Verification scenario:
+            1. Run extraction on HTML with importmap + defer script
+            2. Confirm only the defer script is extracted
+            3. Confirm build_page_assets creates only a defer JS PublishedAsset
         """
         from wagtail_asset_publisher.extractors import extract_assets
 
@@ -708,17 +714,18 @@ class TestBackwardCompatibility:
     def test_plain_scripts_create_single_blocking_record(self, wagtail_page):
         """Plain scripts without defer/async create a single PublishedAsset with loading="".
 
-        【目的】defer/async属性のないプレーンなscriptタグのみを含むページをビルドした際、
-               loading=""（blocking）のPublishedAssetレコードが1つだけ作成されることを保証する
-        【種別】正常系（後方互換性）
-        【技法】モデルライフサイクル
-        【連携対象】build_page_assets → _process_js → PublishedAsset
-        【テストデータ】
-        - loading属性なしの通常スクリプト2つ
-        【検証シナリオ】
-        1. 2つの通常scriptを注入してビルド
-        2. JS PublishedAssetが1つだけ作成されることを確認
-        3. loadingフィールドが空文字であることを確認
+        Purpose: Verify that building a page with only plain script tags (no
+            defer/async) creates exactly one PublishedAsset record with loading=""
+            (blocking), maintaining backward compatibility.
+        Category: Normal case (backward compatibility)
+        Target: build_page_assets -> _process_js -> PublishedAsset
+        Technique: Model lifecycle
+        Integration targets: build_page_assets -> _process_js -> PublishedAsset
+        Test data: Two plain scripts without loading attributes
+        Verification scenario:
+            1. Inject two plain scripts and build
+            2. Confirm exactly one JS PublishedAsset is created
+            3. Confirm the loading field is empty string
         """
         plain_a = "var a = 1;"
         plain_b = "var b = 2;"
@@ -740,17 +747,18 @@ class TestBackwardCompatibility:
     def test_plain_script_middleware_injects_plain_tag(self, wagtail_page):
         """Middleware injects <script src="..."></script> without extra attributes for plain scripts.
 
-        【目的】プレーンなblockingスクリプトに対して、ミドルウェアがdefer/async/type属性なしの
-               シンプルなscriptタグを注入することを保証する（後方互換性）
-        【種別】正常系（後方互換性）
-        【技法】ミドルウェア動作
-        【連携対象】build_page_assets → PublishedAsset → _process_html
-        【テストデータ】
-        - loading属性なしの通常スクリプト1つ
-        【検証シナリオ】
-        1. 通常scriptをビルドしてPublishedAssetを作成
-        2. _process_htmlでHTML変換を実行
-        3. scriptタグにdefer/async/type属性が含まれないことを確認
+        Purpose: Verify that for plain blocking scripts, the middleware injects
+            a simple script tag without defer/async/type attributes, maintaining
+            backward compatibility.
+        Category: Normal case (backward compatibility)
+        Target: build_page_assets -> PublishedAsset -> _process_html
+        Technique: Middleware behavior
+        Integration targets: build_page_assets -> PublishedAsset -> _process_html
+        Test data: One plain script without loading attributes
+        Verification scenario:
+            1. Build a plain script to create a PublishedAsset
+            2. Run _process_html to transform the HTML
+            3. Confirm the script tag has no defer/async/type attributes
         """
         scripts = [_asset(JS_BLOCKING, "")]
         with mock.patch(
@@ -774,17 +782,17 @@ class TestBackwardCompatibility:
     def test_idempotent_rebuild_plain_scripts(self, wagtail_page):
         """Rebuilding with the same plain scripts does not create duplicate records.
 
-        【目的】同じ通常スクリプトで2回ビルドしても、PublishedAssetレコードが
-               重複せず1つのまま維持されることを保証する（冪等性）
-        【種別】冪等性
-        【技法】モデルライフサイクル
-        【連携対象】build_page_assets → update_or_create → PublishedAsset
-        【テストデータ】
-        - 通常スクリプト1つで2回ビルド
-        【検証シナリオ】
-        1. 通常scriptで1回目のビルドを実行
-        2. 同じ通常scriptで2回目のビルドを実行
-        3. JS PublishedAssetレコードが1つのみ存在することを確認
+        Purpose: Verify that building twice with the same plain scripts does not
+            create duplicate PublishedAsset records, ensuring idempotency.
+        Category: Idempotency
+        Target: build_page_assets -> update_or_create -> PublishedAsset
+        Technique: Model lifecycle
+        Integration targets: build_page_assets -> update_or_create -> PublishedAsset
+        Test data: One plain script built twice
+        Verification scenario:
+            1. Execute first build with a plain script
+            2. Execute second build with the same plain script
+            3. Confirm only one JS PublishedAsset record exists
         """
         scripts = [_asset(JS_BLOCKING, "")]
         with mock.patch(
@@ -806,19 +814,20 @@ class TestMiddlewareRoundTrip:
     def test_middleware_full_roundtrip_with_defer(self, wagtail_page):
         """Full middleware round-trip injects defer script tag into HTML response.
 
-        【目的】AssetPublisherMiddleware全体を通したラウンドトリップで、
-               wagtailpageが設定されたHTMLレスポンスにdefer scriptタグが
-               正しく注入されることを保証する
-        【種別】正常系
-        【技法】ミドルウェア動作
-        【連携対象】AssetPublisherMiddleware.__call__ → _get_page → _get_published_assets → _process_html
-        【テストデータ】
-        - defer loading strategyの1スクリプト
-        - wagtailpage属性がセットされたHTMLレスポンス
-        【検証シナリオ】
-        1. defer scriptをビルドしてPublishedAssetを作成
-        2. wagtailpage属性付きリクエストでミドルウェアを通過
-        3. レスポンスHTMLにdefer属性付きscriptタグが注入されていることを確認
+        Purpose: Verify that a full round-trip through AssetPublisherMiddleware
+            correctly injects a defer script tag into the HTML response when
+            the request has a wagtailpage attribute set.
+        Category: Normal case
+        Target: AssetPublisherMiddleware.__call__ -> _get_page -> _get_published_assets -> _process_html
+        Technique: Middleware behavior
+        Integration targets: AssetPublisherMiddleware.__call__ -> _get_page -> _get_published_assets -> _process_html
+        Test data:
+            - One script with defer loading strategy
+            - HTML response with wagtailpage attribute set
+        Verification scenario:
+            1. Build a defer script to create a PublishedAsset
+            2. Pass the request with wagtailpage attribute through the middleware
+            3. Confirm the response HTML contains a script tag with the defer attribute
         """
         scripts = [_asset(JS_DEFER, "defer")]
         with mock.patch(

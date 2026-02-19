@@ -239,15 +239,15 @@ class TestGetPublishedAssets:
     def test_queries_db_on_cache_miss_multiple_js_loading(
         self, MockPublishedAsset, mock_cache
     ):
-        """複数のloading strategyを持つJSアセットがリスト形式で返されることを検証する。
+        """Multiple JS assets with different loading strategies are returned as a list.
 
-        【目的】_get_published_assetsが複数のloading strategyを持つJSアセットを
-               リスト形式で正しく構造化して返すことをもって、
-               loading strategy別のアセット管理要件を保証する
-        【種別】正常系テスト
-        【対象】_get_published_assets(page_id)
-        【技法】同値分割（複数loading strategyのJS構造）
-        【テストデータ】blocking, defer, moduleの3つのJSアセット
+        Purpose: Verify that _get_published_assets returns JS assets with
+            different loading strategies as a properly structured list,
+            one entry per loading group.
+        Category: Normal case
+        Target: _get_published_assets(page_id)
+        Technique: Equivalence partitioning (multiple loading strategies in JS structure)
+        Test data: Three JS assets: blocking, defer, module
         """
         mock_cache.get.return_value = None
 
@@ -427,14 +427,15 @@ class TestProcessHtmlJsLoadingAttrs:
         ],
     )
     def test_js_script_injected_with_loading_attrs(self, loading, expected_tag):
-        """DT-JS-INJECTION参照: loading値に応じたHTML属性でscriptタグが注入される。
+        """Script tag is injected with correct HTML attributes for each loading value (DT-JS-INJECTION).
 
-        【目的】_process_htmlがJSアセットのloading値に応じて正しいHTML属性を
-               scriptタグに付与することをもって、スクリプト読み込み戦略の注入要件を保証する
-        【種別】正常系テスト
-        【対象】_process_html(html, assets)
-        【技法】デシジョンテーブル
-        【テストデータ】DT-JS-INJECTIONの全パターン
+        Purpose: Verify that _process_html injects script tags with the correct
+            HTML attributes (defer, async, type="module") based on the JS asset's
+            loading value.
+        Category: Normal case
+        Target: _process_html(html, assets)
+        Technique: Decision table
+        Test data: All patterns from DT-JS-INJECTION
         """
         html = "<html><head></head><body></body></html>"
         assets = {
@@ -452,15 +453,15 @@ class TestProcessHtmlJsLoadingAttrs:
         assert expected_tag in result
 
     def test_multiple_loading_strategies_injection_order(self):
-        """複数loading strategyのscriptタグが正しい順序で注入されることを検証する。
+        """Script tags with multiple loading strategies are injected in the correct order.
 
-        【目的】blocking -> defer -> module -> async -> module-asyncの
-               順序でscriptタグが注入されることをもって、
-               スクリプトの実行順序保証要件を保証する
-        【種別】正常系テスト
-        【対象】_process_html(html, assets)
-        【技法】状態遷移（注入順序の検証）
-        【テストデータ】5種類のloading strategyを持つJSアセット
+        Purpose: Verify that script tags are injected in the defined order:
+            blocking -> defer -> module -> async -> module-async,
+            ensuring predictable script execution ordering.
+        Category: Normal case
+        Target: _process_html(html, assets)
+        Technique: State transition (injection order verification)
+        Test data: Five JS assets with different loading strategies
         """
         html = "<html><head></head><body></body></html>"
         assets = {
@@ -507,13 +508,14 @@ class TestProcessHtmlJsLoadingAttrs:
         assert async_pos < module_async_pos
 
     def test_single_blocking_js_no_extra_attrs(self):
-        """blocking (loading="") のscriptタグにはdefer/async/type属性が付与されない。
+        """Blocking (loading="") script tag has no defer/async/type attributes.
 
-        【目的】loading=""のJSアセットが余分な属性なしで注入されることを保証する
-        【種別】正常系テスト
-        【対象】_process_html(html, assets)
-        【技法】同値分割（blockingクラスの検証）
-        【テストデータ】loading=""のJSアセット
+        Purpose: Verify that a JS asset with loading="" is injected without
+            any extra attributes.
+        Category: Normal case
+        Target: _process_html(html, assets)
+        Technique: Equivalence partitioning (blocking class verification)
+        Test data: JS asset with loading=""
         """
         html = "<html><head></head><body></body></html>"
         assets = {
@@ -534,14 +536,14 @@ class TestProcessHtmlJsLoadingAttrs:
         assert "module" not in result
 
     def test_js_loading_attrs_mapping_completeness(self):
-        """_JS_LOADING_ATTRSが全loading値のマッピングを持つことを検証する。
+        """_JS_LOADING_ATTRS has a mapping for every entry in _JS_LOADING_ORDER.
 
-        【目的】_JS_LOADING_ATTRSが_JS_LOADING_ORDERの全エントリに対応する
-               マッピングを持つことを保証する
-        【種別】正常系テスト
-        【対象】_JS_LOADING_ATTRS, _JS_LOADING_ORDER
-        【技法】同値分割（マッピング完全性）
-        【テストデータ】_JS_LOADING_ORDERの全エントリ
+        Purpose: Verify that _JS_LOADING_ATTRS provides a mapping for all
+            loading values defined in _JS_LOADING_ORDER.
+        Category: Normal case
+        Target: _JS_LOADING_ATTRS, _JS_LOADING_ORDER
+        Technique: Equivalence partitioning (mapping completeness)
+        Test data: All entries in _JS_LOADING_ORDER
         """
         for loading in _JS_LOADING_ORDER:
             assert loading in _JS_LOADING_ATTRS

@@ -233,15 +233,15 @@ class TestProcessCss:
         mock_hash,
         mock_invalidate,
     ):
-        """_process_cssがupdate_or_createにloading=""を明示的に渡すことを検証する。
+        """_process_css explicitly passes loading="" to update_or_create.
 
-        【目的】unique_together=("page", "asset_type", "loading")に対して
-               CSSアセット作成時にloading=""を明示することで、
-               JSアセットとのunique制約の整合性を保証する
-        【種別】正常系テスト
-        【対象】_process_css(page, storage) -> PublishedAsset.objects.update_or_create
-        【技法】同値分割（CSS固有のloading値伝搬）
-        【テストデータ】スタイル1件
+        Purpose: Verify that _process_css explicitly passes loading="" when
+            creating CSS assets, maintaining consistency with the
+            unique_together=("page", "asset_type", "loading") constraint.
+        Category: Normal case
+        Target: _process_css(page, storage) -> PublishedAsset.objects.update_or_create
+        Technique: Equivalence partitioning (CSS-specific loading value propagation)
+        Test data: One style block
         """
         page = mock.Mock(pk=42)
         storage = mock.Mock()
@@ -402,15 +402,14 @@ class TestProcessJsLoadingGroups:
         mock_hash,
         mock_invalidate,
     ):
-        """異なるloading strategyのスクリプトが別ファイルに保存されることを検証する。
+        """Scripts with different loading strategies are saved to separate files.
 
-        【目的】_process_jsがloading strategy別にスクリプトをグループ化し、
-               各グループを別ファイルとしてstorage.saveすることをもって、
-               スクリプト読み込み戦略のファイル分離要件を保証する
-        【種別】正常系テスト
-        【対象】_process_js(page, storage)
-        【技法】デシジョンテーブル（loading値ごとのグループ化）
-        【テストデータ】blocking, defer, moduleの3つのスクリプト
+        Purpose: Verify that _process_js groups scripts by loading strategy
+            and saves each group as a separate file via storage.save.
+        Category: Normal case
+        Target: _process_js(page, storage)
+        Technique: Decision table (grouping by loading value)
+        Test data: Three scripts: blocking, defer, module
         """
         page = mock.Mock(pk=42)
         storage = mock.Mock()
@@ -473,14 +472,15 @@ class TestProcessJsLoadingGroups:
         mock_hash,
         mock_invalidate,
     ):
-        """non-blockingスクリプトのファイル名にloading suffixが付与されることを検証する。
+        """Non-blocking scripts have a loading suffix in their filename.
 
-        【目的】loading値が空でないスクリプトのファイル名に"-{loading}"サフィックスが
-               付与されることをもって、ファイル名によるloading strategy識別要件を保証する
-        【種別】正常系テスト
-        【対象】_process_js(page, storage) のファイル名生成
-        【技法】境界値分析（空文字 vs 非空文字のloading値）
-        【テストデータ】loading="defer"のスクリプト
+        Purpose: Verify that scripts with a non-empty loading value have
+            a "-{loading}" suffix appended to the filename, enabling
+            loading strategy identification by filename.
+        Category: Normal case
+        Target: _process_js(page, storage) filename generation
+        Technique: Boundary value analysis (empty vs non-empty loading value)
+        Test data: Script with loading="defer"
         """
         page = mock.Mock(pk=42)
         storage = mock.Mock()
@@ -528,14 +528,14 @@ class TestProcessJsLoadingGroups:
         mock_hash,
         mock_invalidate,
     ):
-        """blockingスクリプトのファイル名にloading suffixが付与されないことを検証する。
+        """Blocking scripts have no loading suffix in their filename.
 
-        【目的】loading=""（blocking）のスクリプトのファイル名にサフィックスが
-               付与されないことをもって、後方互換性を保証する
-        【種別】正常系テスト
-        【対象】_process_js(page, storage) のファイル名生成
-        【技法】境界値分析（空文字のloading値）
-        【テストデータ】loading=""のスクリプト
+        Purpose: Verify that scripts with loading="" (blocking) have no
+            suffix appended to the filename, preserving backward compatibility.
+        Category: Normal case
+        Target: _process_js(page, storage) filename generation
+        Technique: Boundary value analysis (empty loading value)
+        Test data: Script with loading=""
         """
         page = mock.Mock(pk=42)
         storage = mock.Mock()
@@ -583,14 +583,14 @@ class TestProcessJsLoadingGroups:
         mock_hash,
         mock_invalidate,
     ):
-        """PublishedAsset.objects.update_or_createにloading値が渡されることを検証する。
+        """Loading value is passed to PublishedAsset.objects.update_or_create.
 
-        【目的】_process_jsがPublishedAssetの作成/更新時にloading値を
-               正しく渡すことをもって、DB上のloading strategy記録要件を保証する
-        【種別】正常系テスト
-        【対象】_process_js(page, storage) -> PublishedAsset.objects.update_or_create
-        【技法】同値分割（loading値の伝搬）
-        【テストデータ】loading="module"のスクリプト
+        Purpose: Verify that _process_js correctly passes the loading value
+            when creating or updating PublishedAsset records in the database.
+        Category: Normal case
+        Target: _process_js(page, storage) -> PublishedAsset.objects.update_or_create
+        Technique: Equivalence partitioning (loading value propagation)
+        Test data: Script with loading="module"
         """
         page = mock.Mock(pk=42)
         storage = mock.Mock()
@@ -644,14 +644,14 @@ class TestProcessJsLoadingGroups:
         mock_hash,
         mock_invalidate,
     ):
-        """同じloading strategyのスクリプトが1つのファイルにまとめられることを検証する。
+        """Scripts with the same loading strategy are merged into one file.
 
-        【目的】同じloading値を持つ複数のスクリプトが1つのビルド呼び出しに
-               まとめられることをもって、loading strategy別の結合要件を保証する
-        【種別】正常系テスト
-        【対象】_process_js(page, storage) のグループ化
-        【技法】同値分割（同一loading値の複数スクリプト）
-        【テストデータ】loading="defer"のスクリプト2つ
+        Purpose: Verify that multiple scripts with the same loading value are
+            combined into a single build call, producing one output file.
+        Category: Normal case
+        Target: _process_js(page, storage) grouping
+        Technique: Equivalence partitioning (multiple scripts with same loading value)
+        Test data: Two scripts with loading="defer"
         """
         page = mock.Mock(pk=42)
         storage = mock.Mock()
@@ -708,14 +708,15 @@ class TestProcessJsLoadingGroups:
         mock_hash,
         mock_invalidate,
     ):
-        """ビルド結果が空のグループはスキップされることを検証する。
+        """Loading group with empty build result is skipped.
 
-        【目的】builderが空文字列を返したloading groupがstorage.saveを
-               呼ばずスキップされることをもって、空ファイル生成防止要件を保証する
-        【種別】エッジケーステスト
-        【対象】_process_js(page, storage)
-        【技法】判定条件網羅（C1）- builder空結果分岐
-        【テストデータ】builderが空文字列を返すスクリプト
+        Purpose: Verify that when the builder returns an empty string for a
+            loading group, storage.save is not called, preventing empty
+            file creation.
+        Category: Edge case
+        Target: _process_js(page, storage)
+        Technique: Decision coverage (C1) - empty builder result branch
+        Test data: Script whose builder returns empty string
         """
         page = mock.Mock(pk=42)
         storage = mock.Mock()
@@ -752,14 +753,14 @@ class TestClearJsAssets:
     """Tests for _clear_js_assets: remove all JS published assets for a page."""
 
     def test_deletes_all_js_assets_from_storage_and_db(self):
-        """_clear_js_assetsがページの全JSアセットをストレージとDBから削除することを検証する。
+        """_clear_js_assets deletes all JS assets from both storage and DB.
 
-        【目的】_clear_js_assetsが指定ページの全JSアセットについて、
-               ストレージファイル削除とDBレコード削除を行うことを保証する
-        【種別】正常系テスト
-        【対象】_clear_js_assets(page, storage)
-        【技法】命令網羅（C0）
-        【テストデータ】3つのloading strategyの既存JSアセット
+        Purpose: Verify that _clear_js_assets removes both the storage files
+            and the database records for all JS assets of the given page.
+        Category: Normal case
+        Target: _clear_js_assets(page, storage)
+        Technique: Statement coverage (C0)
+        Test data: Three existing JS assets with different loading strategies
         """
         page = mock.Mock(pk=42)
         storage = mock.Mock()
@@ -797,14 +798,14 @@ class TestClearJsAssets:
         assert asset_module.delete.call_count == 1
 
     def test_no_existing_js_assets_is_noop(self):
-        """既存JSアセットがない場合、_clear_js_assetsがno-opであることを検証する。
+        """_clear_js_assets is a no-op when no existing JS assets are found.
 
-        【目的】JSアセットが存在しないページに対して_clear_js_assetsを呼んでも
-               エラーにならないことを保証する
-        【種別】エッジケーステスト
-        【対象】_clear_js_assets(page, storage)
-        【技法】境界値分析（空の結果セット）
-        【テストデータ】JSアセットなしのページ
+        Purpose: Verify that calling _clear_js_assets on a page with no JS
+            assets does not raise an error.
+        Category: Edge case
+        Target: _clear_js_assets(page, storage)
+        Technique: Boundary value analysis (empty result set)
+        Test data: Page with no JS assets
         """
         page = mock.Mock(pk=42)
         storage = mock.Mock()
@@ -816,14 +817,14 @@ class TestClearJsAssets:
         storage.delete.assert_not_called()
 
     def test_skips_storage_delete_when_path_empty(self):
-        """URLからパスが抽出できない場合、storage.deleteをスキップすることを検証する。
+        """storage.delete is skipped when URL cannot be parsed to a storage path.
 
-        【目的】_extract_path_from_urlが空文字を返した場合でもDBレコードは
-               削除され、storage.deleteはスキップされることを保証する
-        【種別】エッジケーステスト
-        【対象】_clear_js_assets(page, storage)
-        【技法】判定条件網羅（C1）- 空パス分岐
-        【テストデータ】パース不可能なURLを持つアセット
+        Purpose: Verify that when _extract_path_from_url returns an empty
+            string, the DB record is still deleted but storage.delete is skipped.
+        Category: Edge case
+        Target: _clear_js_assets(page, storage)
+        Technique: Decision coverage (C1) - empty path branch
+        Test data: Asset with an unparsable URL
         """
         page = mock.Mock(pk=42)
         storage = mock.Mock()
@@ -845,14 +846,14 @@ class TestClearJsAssets:
         asset.delete.assert_called_once()
 
     def test_skips_storage_delete_when_file_not_exists(self):
-        """ストレージにファイルが存在しない場合、storage.deleteをスキップすることを検証する。
+        """storage.delete is skipped when the file does not exist in storage.
 
-        【目的】storage.exists()がFalseを返した場合にstorage.deleteが
-               呼ばれないことを保証する
-        【種別】エッジケーステスト
-        【対象】_clear_js_assets(page, storage)
-        【技法】判定条件網羅（C1）- ファイル不在分岐
-        【テストデータ】ストレージにファイルが存在しないアセット
+        Purpose: Verify that storage.delete is not called when
+            storage.exists() returns False.
+        Category: Edge case
+        Target: _clear_js_assets(page, storage)
+        Technique: Decision coverage (C1) - file not exists branch
+        Test data: Asset whose file does not exist in storage
         """
         page = mock.Mock(pk=42)
         storage = mock.Mock()

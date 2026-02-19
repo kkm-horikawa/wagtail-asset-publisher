@@ -235,14 +235,14 @@ class TestResolveLoadingStrategy:
         ],
     )
     def test_loading_strategy_for_extracted_scripts(self, tag, expected_loading):
-        """DT-LOADING-STRATEGY参照: 各属性パターンに対するloading値を検証する。
+        """Correct loading value is set for each script attribute combination (DT-LOADING-STRATEGY).
 
-        【目的】<script>タグの属性組み合わせに応じて、正しいloading strategy
-               が設定されることをもって、スクリプトの読み込み戦略の分類要件を保証する
-        【種別】正常系テスト
-        【対象】AssetExtractor._resolve_loading_strategy(attr_dict)
-        【技法】デシジョンテーブル
-        【テストデータ】DT-LOADING-STRATEGYのDT1-DT9, DT13パターン
+        Purpose: Verify that the correct loading strategy is resolved based on
+            the combination of type, async, and defer attributes on a <script> tag.
+        Category: Normal case
+        Target: AssetExtractor._resolve_loading_strategy(attr_dict)
+        Technique: Decision table
+        Test data: DT-LOADING-STRATEGY patterns DT1-DT9, DT13
         """
         _, scripts = extract_assets(tag)
 
@@ -267,29 +267,29 @@ class TestResolveLoadingStrategy:
         ],
     )
     def test_non_js_type_scripts_not_extracted(self, tag):
-        """DT-LOADING-STRATEGY参照: 非JSタイプのscriptが抽出されないことを検証する。
+        """Non-JS type scripts are excluded from extraction (DT-LOADING-STRATEGY).
 
-        【目的】importmap, speculationrules, text/template等の非JSタイプの
-               scriptタグが抽出対象から除外されることをもって、
-               非実行スクリプトの保護要件を保証する
-        【種別】正常系テスト（スキップ動作）
-        【対象】AssetExtractor._resolve_loading_strategy(attr_dict)
-        【技法】デシジョンテーブル
-        【テストデータ】DT-LOADING-STRATEGYのDT10-DT12パターン
+        Purpose: Verify that script tags with non-JS types such as importmap,
+            speculationrules, and text/template are excluded from extraction,
+            preserving non-executable scripts inline.
+        Category: Normal case (skip behavior)
+        Target: AssetExtractor._resolve_loading_strategy(attr_dict)
+        Technique: Decision table
+        Test data: DT-LOADING-STRATEGY patterns DT10-DT12
         """
         _, scripts = extract_assets(tag)
 
         assert scripts == []
 
     def test_default_script_has_empty_loading(self):
-        """属性なし<script>のloading値がデフォルト空文字であることを検証する。
+        """Plain <script> without attributes has loading="" (blocking) by default.
 
-        【目的】<script>タグにasync/defer/type属性がない場合、
-               loading=""（ブロッキング）として分類されることを保証する
-        【種別】正常系テスト
-        【対象】extract_assets(html) -> ExtractedAsset.loading
-        【技法】同値分割（属性なしクラスの代表値）
-        【テストデータ】属性なしの<script>タグ
+        Purpose: Verify that a <script> tag with no async, defer, or type
+            attribute is classified as loading="" (blocking).
+        Category: Normal case
+        Target: extract_assets(html) -> ExtractedAsset.loading
+        Technique: Equivalence partitioning (representative of no-attribute class)
+        Test data: <script> tag with no attributes
         """
         html = "<script>console.log('default');</script>"
 
@@ -299,14 +299,14 @@ class TestResolveLoadingStrategy:
         assert scripts[0].loading == ""
 
     def test_mixed_loading_strategies_all_extracted(self):
-        """異なるloading strategyのスクリプトが全て正しく抽出されることを検証する。
+        """Scripts with different loading strategies are all extracted correctly.
 
-        【目的】複数のloading strategyが混在するHTMLから、各スクリプトが
-               正しいloading値で個別に抽出されることを保証する
-        【種別】正常系テスト
-        【対象】extract_assets(html)
-        【技法】状態遷移（パーサの連続タグ処理）
-        【テストデータ】blocking, defer, async, moduleの4種類の<script>タグ
+        Purpose: Verify that when multiple loading strategies are mixed in HTML,
+            each script is individually extracted with its correct loading value.
+        Category: Normal case
+        Target: extract_assets(html)
+        Technique: State transition (parser handling consecutive tags)
+        Test data: Four <script> tags: blocking, defer, async, module
         """
         html = (
             "<script>blocking();</script>"
@@ -328,14 +328,14 @@ class TestResolveLoadingStrategy:
         assert scripts[3].content == "modular();"
 
     def test_non_js_type_mixed_with_js_scripts(self):
-        """非JSタイプのscriptが除外され、JSスクリプトのみ抽出されることを検証する。
+        """Non-JS type scripts are excluded while normal JS scripts are extracted.
 
-        【目的】importmapタグと通常スクリプトが混在する場合、
-               importmapのみがスキップされ通常スクリプトが正しく抽出されることを保証する
-        【種別】正常系テスト（混在ケース）
-        【対象】extract_assets(html)
-        【技法】同値分割（抽出対象と非対象の混在）
-        【テストデータ】importmapタグ1つ + 通常scriptタグ1つ
+        Purpose: Verify that when importmap and normal scripts coexist, only
+            the importmap is skipped and the normal script is correctly extracted.
+        Category: Normal case (mixed case)
+        Target: extract_assets(html)
+        Technique: Equivalence partitioning (extractable and non-extractable mixed)
+        Test data: One importmap tag + one normal script tag
         """
         html = (
             '<script type="importmap">{"imports": {}}</script>'
@@ -353,28 +353,28 @@ class TestExtractedAssetLoadingField:
     """Tests for ExtractedAsset loading field default value."""
 
     def test_extracted_asset_loading_default(self):
-        """ExtractedAssetのloading値がデフォルトで空文字であることを検証する。
+        """ExtractedAsset loading field defaults to empty string.
 
-        【目的】ExtractedAsset NamedTupleのloading fieldがデフォルトで
-               空文字に設定されることを保証する
-        【種別】正常系テスト
-        【対象】ExtractedAsset(content, content_hash)
-        【技法】境界値分析（デフォルト値）
-        【テストデータ】loadingを指定しないExtractedAsset
+        Purpose: Verify that the loading field of ExtractedAsset NamedTuple
+            defaults to an empty string when not explicitly specified.
+        Category: Normal case
+        Target: ExtractedAsset(content, content_hash)
+        Technique: Boundary value analysis (default value)
+        Test data: ExtractedAsset created without specifying loading
         """
         asset = ExtractedAsset(content="body {}", content_hash="abc12345")
 
         assert asset.loading == ""
 
     def test_extracted_asset_loading_explicit(self):
-        """ExtractedAssetのloading値を明示的に設定できることを検証する。
+        """ExtractedAsset loading field can be set explicitly.
 
-        【目的】ExtractedAsset NamedTupleのloading fieldに明示的な値を
-               設定できることを保証する
-        【種別】正常系テスト
-        【対象】ExtractedAsset(content, content_hash, loading)
-        【技法】同値分割（明示的なloading値）
-        【テストデータ】loading="defer"のExtractedAsset
+        Purpose: Verify that the loading field of ExtractedAsset NamedTuple
+            can be explicitly set to a specific value.
+        Category: Normal case
+        Target: ExtractedAsset(content, content_hash, loading)
+        Technique: Equivalence partitioning (explicit loading value)
+        Test data: ExtractedAsset with loading="defer"
         """
         asset = ExtractedAsset(
             content="body {}", content_hash="abc12345", loading="defer"
@@ -383,13 +383,14 @@ class TestExtractedAssetLoadingField:
         assert asset.loading == "defer"
 
     def test_extracted_asset_equality_with_loading(self):
-        """同じloading値のExtractedAssetが等価であることを検証する。
+        """Two ExtractedAssets with the same loading value are equal.
 
-        【目的】loading fieldを含むExtractedAssetの等価性が正しく機能することを保証する
-        【種別】正常系テスト
-        【対象】ExtractedAsset equality
-        【技法】同値分割
-        【テストデータ】同一のcontent, content_hash, loadingを持つ2つのインスタンス
+        Purpose: Verify that ExtractedAsset equality works correctly when the
+            loading field is included.
+        Category: Normal case
+        Target: ExtractedAsset equality
+        Technique: Equivalence partitioning
+        Test data: Two instances with identical content, content_hash, and loading
         """
         asset1 = ExtractedAsset(content="x", content_hash="h", loading="module")
         asset2 = ExtractedAsset(content="x", content_hash="h", loading="module")
@@ -397,13 +398,14 @@ class TestExtractedAssetLoadingField:
         assert asset1 == asset2
 
     def test_extracted_asset_inequality_by_loading(self):
-        """異なるloading値のExtractedAssetが不等であることを検証する。
+        """Two ExtractedAssets with different loading values are not equal.
 
-        【目的】loading fieldが異なるExtractedAssetが不等であることを保証する
-        【種別】正常系テスト
-        【対象】ExtractedAsset inequality
-        【技法】同値分割（異なるloading値）
-        【テストデータ】loadingのみ異なる2つのインスタンス
+        Purpose: Verify that ExtractedAssets differing only in the loading
+            field are considered unequal.
+        Category: Normal case
+        Target: ExtractedAsset inequality
+        Technique: Equivalence partitioning (different loading values)
+        Test data: Two instances differing only in loading value
         """
         asset1 = ExtractedAsset(content="x", content_hash="h", loading="defer")
         asset2 = ExtractedAsset(content="x", content_hash="h", loading="async")
