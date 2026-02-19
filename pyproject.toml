@@ -41,13 +41,13 @@ Issues = "https://github.com/kkm-horikawa/wagtail-asset-publisher/issues"
 Changelog = "https://github.com/kkm-horikawa/wagtail-asset-publisher/releases"
 
 [project.optional-dependencies]
-tailwind = [
-    "django-tailwind-cli>=2.0",
-]
 minify = [
     "minify-html>=0.16",
     "rcssmin>=1.2",
     "rjsmin>=1.2",
+]
+tailwind = [
+    "django-tailwind-cli>=2.0",
 ]
 dev = [
     "pytest>=8.0",
@@ -131,7 +131,7 @@ exclude = ["tests/"]
 disable_error_code = ["unused-ignore"]
 
 [[tool.mypy.overrides]]
-module = ["wagtail.*"]
+module = ["wagtail.*", "minify_html"]
 ignore_missing_imports = true
 
 [tool.django-stubs]

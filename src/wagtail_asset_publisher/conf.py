@@ -24,6 +24,8 @@ DEFAULTS: dict[str, Any] = {
     "TERSER_OPTIONS": ["-c", "-m"],
     # Asset generation
     "HASH_LENGTH": 8,
+    # HTML minification
+    "MINIFY_HTML": True,
     # Tailwind preview CDN URL
     "TAILWIND_CDN_URL": "https://unpkg.com/@tailwindcss/browser@4",
 }

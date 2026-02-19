@@ -36,6 +36,9 @@ class AssetPublisherMiddleware:
         if "text/html" not in content_type:
             return response
 
+        if response.streaming:
+            return response
+
         if _is_preview_request(request):
             return _handle_preview(response)
 
@@ -50,6 +53,7 @@ class AssetPublisherMiddleware:
         charset = response.charset or "utf-8"
         content = response.content.decode(charset)
         content = _process_html(content, assets)
+        content = _minify_html(content)
         response.content = content.encode(charset)
         response["Content-Length"] = len(response.content)
 
@@ -155,6 +159,38 @@ def _escape_attr(value: str) -> str:
         .replace("<", "&lt;")
         .replace(">", "&gt;")
     )
+
+
+def _minify_html(html: str) -> str:
+    """Minify HTML to reduce response size.
+
+    Uses minify-html if available and MINIFY_HTML setting is enabled.
+    Falls back to returning HTML unchanged if library is not installed.
+    """
+    from .conf import get_setting
+
+    if not get_setting("MINIFY_HTML"):
+        return html
+
+    try:
+        import minify_html
+    except ImportError:
+        return html
+
+    try:
+        result = minify_html.minify(
+            html,
+            minify_css=True,
+            minify_js=True,
+            keep_closing_tags=True,
+            keep_html_and_head_opening_tags=True,
+        )
+        return str(result)
+    except Exception:
+        logger.warning(
+            "HTML minification failed, returning original HTML", exc_info=True
+        )
+        return html
 
 
 def _compute_hash(content: str) -> str:
