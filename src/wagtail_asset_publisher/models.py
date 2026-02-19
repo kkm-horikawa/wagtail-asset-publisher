@@ -27,12 +27,15 @@ class PublishedAsset(models.Model):
         db_index=True,
     )
     asset_type = models.CharField(max_length=3, choices=AssetType.choices)
+    loading = models.CharField(max_length=16, default="", blank=True)
     url = models.URLField(max_length=2048)
     content_hashes = models.JSONField(default=list)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        unique_together = [("page", "asset_type")]
+        unique_together = [("page", "asset_type", "loading")]
 
     def __str__(self) -> str:
+        if self.loading:
+            return f"PublishedAsset({self.page_id}, {self.asset_type}, {self.loading})"
         return f"PublishedAsset({self.page_id}, {self.asset_type})"

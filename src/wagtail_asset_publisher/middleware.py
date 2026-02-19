@@ -107,7 +107,11 @@ def _get_page(request: HttpRequest) -> Any:
 
 
 def _get_published_assets(page_id: int) -> dict[str, Any]:
-    """Look up published assets for a page, with caching."""
+    """Look up published assets for a page, with caching.
+
+    CSS is stored as a single dict.  JS is stored as a list of dicts
+    (one per loading strategy) to support defer/async/module grouping.
+    """
     cache_key = f"{CACHE_KEY_PREFIX}{page_id}"
     cached = cache.get(cache_key)
     if cached is not None:
@@ -116,14 +120,41 @@ def _get_published_assets(page_id: int) -> dict[str, Any]:
     from .models import PublishedAsset
 
     assets: dict[str, Any] = {}
+    js_entries: list[dict[str, Any]] = []
+
     for asset in PublishedAsset.objects.filter(page_id=page_id):
-        assets[asset.asset_type] = {
-            "url": asset.url,
-            "content_hashes": set(asset.content_hashes),
-        }
+        if asset.asset_type == "js":
+            js_entries.append(
+                {
+                    "url": asset.url,
+                    "content_hashes": set(asset.content_hashes),
+                    "loading": asset.loading,
+                }
+            )
+        else:
+            assets[asset.asset_type] = {
+                "url": asset.url,
+                "content_hashes": set(asset.content_hashes),
+            }
+
+    if js_entries:
+        assets["js"] = js_entries
 
     cache.set(cache_key, assets, CACHE_TIMEOUT)
     return assets
+
+
+# Loading strategy -> HTML attributes mapping
+_JS_LOADING_ATTRS: dict[str, str] = {
+    "": "",
+    "defer": " defer",
+    "async": " async",
+    "module": ' type="module"',
+    "module-async": ' type="module" async',
+}
+
+# Injection order: blocking first, then defer, module, async, module-async
+_JS_LOADING_ORDER = ["", "defer", "module", "async", "module-async"]
 
 
 def _process_html(html: str, assets: dict[str, Any]) -> str:
@@ -133,7 +164,8 @@ def _process_html(html: str, assets: dict[str, Any]) -> str:
     if "css" in assets:
         css_hashes = assets["css"]["content_hashes"]
     if "js" in assets:
-        js_hashes = assets["js"]["content_hashes"]
+        for entry in assets["js"]:
+            js_hashes |= entry["content_hashes"]
 
     if css_hashes or js_hashes:
         html = _strip_matching_tags(html, css_hashes, js_hashes)
@@ -144,9 +176,22 @@ def _process_html(html: str, assets: dict[str, Any]) -> str:
         html = html.replace("</head>", f"{css_tag}\n</head>", 1)
 
     if "js" in assets:
-        js_url = assets["js"]["url"]
-        js_tag = f'<script src="{_escape_attr(js_url)}"></script>'
-        html = html.replace("</body>", f"{js_tag}\n</body>", 1)
+        js_entries = sorted(
+            assets["js"],
+            key=lambda e: (
+                _JS_LOADING_ORDER.index(e["loading"])
+                if e["loading"] in _JS_LOADING_ORDER
+                else len(_JS_LOADING_ORDER)
+            ),
+        )
+        js_tags = []
+        for entry in js_entries:
+            attrs = _JS_LOADING_ATTRS.get(entry["loading"], "")
+            js_tags.append(
+                f'<script src="{_escape_attr(entry["url"])}"{attrs}></script>'
+            )
+        js_block = "\n".join(js_tags)
+        html = html.replace("</body>", f"{js_block}\n</body>", 1)
 
     return html
 

@@ -111,14 +111,14 @@ class TestPublishedAssetDBConstraints:
     """Tests for DB-level constraints that require actual database access."""
 
     def test_unique_together_constraint(self):
-        """Cannot create two PublishedAssets for same page + asset_type.
+        """Cannot create two PublishedAssets for same page + asset_type + loading.
 
         Purpose: Verify the unique_together constraint prevents duplicate
-            entries, ensuring each page has at most one CSS and one JS asset.
+            entries, ensuring each page has at most one asset per type+loading.
         Category: Abnormal case (constraint violation)
-        Target: PublishedAsset unique_together = [("page", "asset_type")]
+        Target: PublishedAsset unique_together = [("page", "asset_type", "loading")]
         Technique: Error guessing (duplicate insert)
-        Test data: Two CSS PublishedAssets for the same page
+        Test data: Two CSS PublishedAssets for the same page with same loading
         """
         from django.db import IntegrityError
         from wagtail.models import Page
@@ -129,6 +129,7 @@ class TestPublishedAssetDBConstraints:
         PublishedAsset.objects.create(
             page=page,
             asset_type=AssetType.CSS,
+            loading="",
             url="https://example.com/a.css",
             content_hashes=["hash1"],
         )
@@ -137,6 +138,7 @@ class TestPublishedAssetDBConstraints:
             PublishedAsset.objects.create(
                 page=page,
                 asset_type=AssetType.CSS,
+                loading="",
                 url="https://example.com/b.css",
                 content_hashes=["hash2"],
             )

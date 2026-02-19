@@ -27,6 +27,8 @@ wagtail-asset-publisher solves this transparently. When a page is published, inl
 - **Content-hashed filenames** -- Automatic cache busting: `{page_id}-{hash}.css`
 - **Middleware-driven** -- At render time, matched inline tags are stripped and replaced with static file references
 - **SHA-256 content matching** -- Only strips tags whose content hash matches published assets; base template tags are untouched
+- **Script loading attribute preservation** -- `defer`, `async`, and `type="module"` attributes are respected; scripts are grouped by loading strategy and served as separate files with the correct attributes
+- **Non-JS script type exclusion** -- `<script type="importmap">`, `<script type="speculationrules">`, and other non-JS script types are never extracted and remain inline
 - **HTML minification** -- Optional response minification via `minify-html` for smaller page payloads (enabled by default when installed)
 - **Pluggable builders** -- Raw concatenation (default) or Tailwind CSS JIT compilation
 - **Pluggable storage** -- Django default storage (S3, GCS, Azure) or local filesystem
@@ -84,18 +86,21 @@ View the published page source. You should see something like:
 ```html
 <link rel="stylesheet" href="/media/page-assets/css/42-a1b2c3d4.css">
 <script src="/media/page-assets/js/42-e5f6a7b8.js"></script>
+<script src="/media/page-assets/js/42-f9a0b1c2-defer.js" defer></script>
+<script src="/media/page-assets/js/42-d3e4f5a6-module.js" type="module"></script>
 ```
 
-The original inline tags are gone -- replaced by cached, content-hashed static files.
+The original inline tags are gone -- replaced by cached, content-hashed static files. Scripts with different loading attributes (`defer`, `async`, `type="module"`) are grouped and served as separate files, each with the appropriate attribute restored.
 
 ### How It Works
 
 1. **Publish**: Wagtail fires the `published` signal
-2. **Extract**: All StreamField fields on the page are rendered; inline `<style>` and `<script>` tags are parsed out (respecting `data-no-extract`)
-3. **Build**: Extracted content is passed to the configured builder (Raw or Tailwind)
-4. **Store**: The built output is saved to storage with a content-hashed filename
-5. **Record**: A `PublishedAsset` record stores the URL and content hashes for the page
-6. **Serve**: On the next request, the middleware looks up published assets, strips inline tags whose SHA-256 hash matches, and injects `<link>`/`<script src>` references
+2. **Extract**: All StreamField fields on the page are rendered; inline `<style>` and `<script>` tags are parsed out (respecting `data-no-extract`). Non-JS script types (`importmap`, `speculationrules`, etc.) are skipped and left inline. Each extracted script records its loading strategy (`defer`, `async`, `module`, or blocking).
+3. **Group**: Scripts are grouped by loading strategy. Each group is built and stored as a separate file (e.g., `42-abc123.js`, `42-def456-defer.js`, `42-ghi789-module.js`).
+4. **Build**: Each group's content is passed to the configured builder (Raw or Tailwind)
+5. **Store**: Each built output is saved to storage with a content-hashed filename
+6. **Record**: One `PublishedAsset` record per group stores the URL, content hashes, and loading strategy for the page
+7. **Serve**: On the next request, the middleware looks up published assets, strips inline tags whose SHA-256 hash matches, and injects `<link>`/`<script src>` references. Each injected `<script>` tag carries the correct loading attributes (`defer`, `async`, `type="module"`).
 
 ## Configuration
 
@@ -200,6 +205,47 @@ This is useful for:
 ```
 
 External scripts (`<script src="...">`) are never extracted regardless of attributes.
+
+### Script Loading Attributes
+
+wagtail-asset-publisher preserves the loading strategy of extracted inline scripts. Scripts with different loading attributes are grouped into separate static files, and the correct attributes are restored on the injected `<script>` tags at serve time.
+
+**Supported loading strategies:**
+
+| Inline tag | Generated file suffix | Injected tag |
+|---|---|---|
+| `<script>` | _(none)_ | `<script src="...">` |
+| `<script defer>` | `-defer` | `<script src="..." defer>` |
+| `<script async>` | `-async` | `<script src="..." async>` |
+| `<script type="module">` | `-module` | `<script src="..." type="module">` |
+| `<script type="module" async>` | `-module-async` | `<script src="..." type="module" async>` |
+
+Scripts within the same loading group are concatenated into a single file. The injection order at serve time is: blocking, `defer`, `module`, `async`, `module-async`.
+
+**Non-JS script types** (`importmap`, `speculationrules`, and any other non-JavaScript `type` attribute) are never extracted and always remain inline:
+
+```html
+<!-- Extracted and served as a static file with defer -->
+<script defer>
+  document.addEventListener('DOMContentLoaded', () => { ... });
+</script>
+
+<!-- Extracted as a module -->
+<script type="module">
+  import { init } from './app.js';
+  init();
+</script>
+
+<!-- Never extracted -- stays inline -->
+<script type="importmap">
+  { "imports": { "app": "/static/app.js" } }
+</script>
+
+<!-- Never extracted -- stays inline -->
+<script type="speculationrules">
+  { "prefetch": [{ "source": "list", "urls": ["/next-page/"] }] }
+</script>
+```
 
 ### Asset Optimization (CSS Minification and JS Obfuscation)
 
