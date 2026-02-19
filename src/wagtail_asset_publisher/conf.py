@@ -17,6 +17,11 @@ DEFAULTS: dict[str, Any] = {
     "TAILWIND_CLI_PATH": None,
     "TAILWIND_CONFIG": None,
     "TAILWIND_BASE_CSS": None,
+    # Asset optimization
+    "OBFUSCATE_JS": False,
+    "MINIFY_CSS": True,
+    "TERSER_PATH": None,
+    "TERSER_OPTIONS": ["-c", "-m"],
     # Asset generation
     "HASH_LENGTH": 8,
     # HTML minification

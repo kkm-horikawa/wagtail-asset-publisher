@@ -482,7 +482,9 @@ class TestTailwindBuildInputCss:
             "wagtail_asset_publisher.builders.tailwind.get_setting",
             return_value=None,
         ):
-            result = builder._build_input_css(".custom { color: red; }", content_file=None)
+            result = builder._build_input_css(
+                ".custom { color: red; }", content_file=None
+            )
 
         assert DEFAULT_TAILWIND_INPUT in result
         assert ".custom { color: red; }" in result

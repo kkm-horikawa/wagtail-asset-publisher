@@ -2,9 +2,11 @@
 
 Covers AssetPublisherMiddleware, helper functions (_is_preview_request,
 _get_page, _get_published_assets, _process_html, _strip_matching_tags,
-_escape_attr), and invalidate_cache.
+_escape_attr, _minify_html), and invalidate_cache.
 """
 
+import logging
+import sys
 from unittest import mock
 
 from wagtail_asset_publisher.extractors import compute_content_hash
@@ -16,6 +18,7 @@ from wagtail_asset_publisher.middleware import (
     _get_page,
     _get_published_assets,
     _is_preview_request,
+    _minify_html,
     _process_html,
     _strip_matching_tags,
     invalidate_cache,
@@ -778,3 +781,131 @@ class TestTagStripperHandlers:
 
         assert "<!DOCTYPE html>" in result
         assert "<style>" not in result
+
+
+class TestMinifyHtml:
+    """Tests for _minify_html: HTML minification with optional minify-html library."""
+
+    @mock.patch("wagtail_asset_publisher.conf.get_setting")
+    def test_minify_disabled_returns_original_html(self, mock_get_setting):
+        """MINIFY_HTML=False setting returns the input HTML unchanged.
+
+        Purpose: Verify that _minify_html respects the MINIFY_HTML=False setting
+            and returns the original HTML without attempting to import minify-html,
+            ensuring operators can disable minification in their configuration.
+        Category: Normal case
+        Target: _minify_html(html)
+        Technique: Equivalence partitioning (disabled setting)
+        Test data: Sample HTML with MINIFY_HTML=False
+        """
+        mock_get_setting.return_value = False
+        html = "<html><head></head><body>  <p>Hello</p>  </body></html>"
+
+        result = _minify_html(html)
+
+        assert result == html
+        mock_get_setting.assert_called_once_with("MINIFY_HTML")
+
+    @mock.patch("wagtail_asset_publisher.conf.get_setting")
+    def test_minify_html_not_installed_returns_original(self, mock_get_setting):
+        """Missing minify-html library returns the input HTML unchanged.
+
+        Purpose: Verify that when MINIFY_HTML=True but the minify-html package
+            is not installed, the function gracefully falls back to returning
+            the original HTML, enabling optional dependency behavior.
+        Category: Edge case
+        Target: _minify_html(html)
+        Technique: Error guessing (missing optional dependency)
+        Test data: Sample HTML with minify-html not installed
+        """
+        mock_get_setting.return_value = True
+        html = "<html><head></head><body>  <p>Hello</p>  </body></html>"
+
+        with mock.patch.dict(sys.modules, {"minify_html": None}):
+            result = _minify_html(html)
+
+        assert result == html
+
+    @mock.patch("wagtail_asset_publisher.conf.get_setting")
+    def test_minify_exception_returns_original_and_logs_warning(
+        self, mock_get_setting, caplog
+    ):
+        """Exception in minify_html.minify() returns original HTML and logs warning.
+
+        Purpose: Verify that if the minify-html library raises an exception during
+            minification, the original HTML is returned and a warning is logged,
+            ensuring the middleware never breaks page rendering due to minification errors.
+        Category: Abnormal case
+        Target: _minify_html(html)
+        Technique: Error guessing (library exception)
+        Test data: Sample HTML with minify() raising RuntimeError
+        """
+        mock_get_setting.return_value = True
+        html = "<html><head></head><body>  <p>Hello</p>  </body></html>"
+        mock_minify_module = mock.MagicMock()
+        mock_minify_module.minify.side_effect = RuntimeError("minification failed")
+
+        with mock.patch.dict("sys.modules", {"minify_html": mock_minify_module}):
+            with caplog.at_level(logging.WARNING, logger="wagtail_asset_publisher.middleware"):
+                result = _minify_html(html)
+
+        assert result == html
+        assert "HTML minification failed" in caplog.text
+
+    @mock.patch("wagtail_asset_publisher.conf.get_setting")
+    def test_minify_success_delegates_with_correct_options(self, mock_get_setting):
+        """Successful minification delegates to minify_html.minify() with correct options.
+
+        Purpose: Verify that when MINIFY_HTML=True and the library is available,
+            _minify_html calls minify_html.minify() with the expected configuration
+            options (minify_css, minify_js, keep_closing_tags,
+            keep_html_and_head_opening_tags) and returns the minified result.
+        Category: Normal case
+        Target: _minify_html(html)
+        Technique: Equivalence partitioning (successful minification)
+        Test data: Sample HTML with mocked minify_html returning minified output
+        """
+        mock_get_setting.return_value = True
+        html = "<html><head></head><body>  <p>Hello</p>  </body></html>"
+        minified = "<html><head></head><body><p>Hello</p></body></html>"
+        mock_minify_module = mock.MagicMock()
+        mock_minify_module.minify.return_value = minified
+
+        with mock.patch.dict("sys.modules", {"minify_html": mock_minify_module}):
+            result = _minify_html(html)
+
+        assert result == minified
+        mock_minify_module.minify.assert_called_once_with(
+            html,
+            minify_css=True,
+            minify_js=True,
+            keep_closing_tags=True,
+            keep_html_and_head_opening_tags=True,
+        )
+
+
+class TestMiddlewareStreamingGuard:
+    """Tests for AssetPublisherMiddleware.__call__ streaming response guard."""
+
+    def test_streaming_response_passes_through(self):
+        """StreamingHttpResponse (response.streaming=True) is returned untouched.
+
+        Purpose: Verify that streaming responses bypass all middleware processing
+            because their content cannot be accessed via response.content, ensuring
+            the middleware does not break file downloads or server-sent events.
+        Category: Edge case
+        Target: AssetPublisherMiddleware.__call__(request)
+        Technique: Equivalence partitioning (streaming response)
+        Test data: Response with streaming=True and text/html content type
+        """
+        request = mock.Mock()
+        response = mock.Mock()
+        response.get.return_value = "text/html; charset=utf-8"
+        response.streaming = True
+
+        get_response = mock.Mock(return_value=response)
+        middleware = AssetPublisherMiddleware(get_response)
+
+        result = middleware(request)
+
+        assert result is response

@@ -12,6 +12,9 @@ import pytest
 from wagtail_asset_publisher.utils import (
     _clear_asset,
     _extract_path_from_url,
+    _find_terser,
+    _minify_css,
+    _optimize_js,
     _process_css,
     _process_js,
     build_page_assets,
@@ -87,6 +90,7 @@ class TestProcessCss:
 
         mock_get_setting.side_effect = lambda key: {
             "CSS_BUILDER": "wagtail_asset_publisher.builders.raw.RawAssetBuilder",
+            "MINIFY_CSS": False,
             "HASH_LENGTH": 8,
             "CSS_PREFIX": "page-assets/css/",
         }[key]
@@ -193,6 +197,7 @@ class TestProcessCss:
 
         mock_get_setting.side_effect = lambda key: {
             "CSS_BUILDER": "wagtail_asset_publisher.builders.tailwind.TailwindCSSBuilder",
+            "MINIFY_CSS": False,
             "HASH_LENGTH": 8,
             "CSS_PREFIX": "page-assets/css/",
         }[key]
@@ -250,6 +255,7 @@ class TestProcessJs:
 
         mock_get_setting.side_effect = lambda key: {
             "JS_BUILDER": "wagtail_asset_publisher.builders.raw.RawAssetBuilder",
+            "OBFUSCATE_JS": False,
             "HASH_LENGTH": 8,
             "JS_PREFIX": "page-assets/js/",
         }[key]
@@ -673,6 +679,7 @@ class TestCacheInvalidation:
 
         mock_get_setting.side_effect = lambda key: {
             "CSS_BUILDER": "wagtail_asset_publisher.builders.raw.RawAssetBuilder",
+            "MINIFY_CSS": False,
             "HASH_LENGTH": 8,
             "CSS_PREFIX": "page-assets/css/",
         }[key]
@@ -724,3 +731,628 @@ class TestCacheInvalidation:
         _process_css(page, storage)
 
         mock_invalidate.assert_called_with(42)
+
+
+class TestOptimizeJs:
+    """Tests for _optimize_js() terser/rjsmin fallback logic."""
+
+    @mock.patch(
+        "wagtail_asset_publisher.utils._find_terser", return_value="/usr/bin/terser"
+    )
+    @mock.patch("wagtail_asset_publisher.utils.get_setting", return_value=["-c", "-m"])
+    @mock.patch("wagtail_asset_publisher.utils.subprocess.run")
+    def test_terser_success_returns_stdout(self, mock_run, _mock_setting, _mock_find):
+        """_optimize_js returns subprocess.run stdout when terser succeeds.
+
+        Purpose: Verify that _optimize_js returns the stdout of subprocess.run
+                 when terser is available and exits successfully.
+        Category: Normal case
+        Target: _optimize_js(content)
+        Technique: Statement coverage (C0)
+        Test data: Simple JS code string
+        """
+        mock_run.return_value = mock.Mock(stdout="var a=1;")
+        js_input = "var  a  =  1;"
+
+        result = _optimize_js(js_input)
+
+        assert result == "var a=1;"
+        mock_run.assert_called_once_with(
+            ["/usr/bin/terser", "-c", "-m"],
+            input=js_input,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=True,
+        )
+
+    @mock.patch(
+        "wagtail_asset_publisher.utils._find_terser", return_value="/usr/bin/terser"
+    )
+    @mock.patch("wagtail_asset_publisher.utils.get_setting", return_value=["-c", "-m"])
+    @mock.patch("wagtail_asset_publisher.utils.subprocess.run")
+    def test_terser_success_no_warning_logged(
+        self, mock_run, _mock_setting, _mock_find
+    ):
+        """_optimize_js does not log a warning when terser succeeds.
+
+        Purpose: Verify that _optimize_js does not emit any warning log
+                 when terser exits successfully.
+        Category: Normal case
+        Target: _optimize_js(content)
+        Technique: Error guessing
+        Test data: Simple JS code string
+        """
+        mock_run.return_value = mock.Mock(stdout="var a=1;")
+
+        with mock.patch("wagtail_asset_publisher.utils.logger") as mock_logger:
+            _optimize_js("var  a  =  1;")
+
+        mock_logger.warning.assert_not_called()
+
+    @mock.patch(
+        "wagtail_asset_publisher.utils._find_terser", return_value="/usr/bin/terser"
+    )
+    @mock.patch("wagtail_asset_publisher.utils.get_setting", return_value=["-c", "-m"])
+    @mock.patch("wagtail_asset_publisher.utils.subprocess.run")
+    def test_terser_called_process_error_falls_back_to_rjsmin(
+        self, mock_run, _mock_setting, _mock_find
+    ):
+        """_optimize_js falls back to rjsmin when terser raises CalledProcessError.
+
+        Purpose: Verify that _optimize_js falls back to rjsmin and returns the
+                 minified result when terser raises CalledProcessError.
+        Category: Error case
+        Target: _optimize_js(content)
+        Technique: Decision coverage (C1) - CalledProcessError branch
+        Test data: subprocess.CalledProcessError simulating terser failure
+        """
+        import subprocess
+
+        mock_run.side_effect = subprocess.CalledProcessError(1, "terser")
+        js_input = "var  a  =  1;"
+        mock_rjsmin = mock.Mock()
+        mock_rjsmin.jsmin.return_value = "var a=1;"
+
+        with mock.patch.dict("sys.modules", {"rjsmin": mock_rjsmin}):
+            result = _optimize_js(js_input)
+
+        assert result == "var a=1;"
+
+    @mock.patch(
+        "wagtail_asset_publisher.utils._find_terser", return_value="/usr/bin/terser"
+    )
+    @mock.patch("wagtail_asset_publisher.utils.get_setting", return_value=["-c", "-m"])
+    @mock.patch("wagtail_asset_publisher.utils.subprocess.run")
+    def test_terser_timeout_expired_falls_back_to_rjsmin(
+        self, mock_run, _mock_setting, _mock_find
+    ):
+        """_optimize_js falls back to rjsmin when terser raises TimeoutExpired.
+
+        Purpose: Verify that _optimize_js falls back to rjsmin and returns the
+                 minified result when terser raises TimeoutExpired.
+        Category: Error case
+        Target: _optimize_js(content)
+        Technique: Decision coverage (C1) - TimeoutExpired branch
+        Test data: subprocess.TimeoutExpired simulating terser timeout
+        """
+        import subprocess
+
+        mock_run.side_effect = subprocess.TimeoutExpired("terser", 30)
+        js_input = "var  a  =  1;"
+        mock_rjsmin = mock.Mock()
+        mock_rjsmin.jsmin.return_value = "var a=1;"
+
+        with mock.patch.dict("sys.modules", {"rjsmin": mock_rjsmin}):
+            result = _optimize_js(js_input)
+
+        assert result == "var a=1;"
+
+    @mock.patch(
+        "wagtail_asset_publisher.utils._find_terser", return_value="/usr/bin/terser"
+    )
+    @mock.patch("wagtail_asset_publisher.utils.get_setting", return_value=["-c", "-m"])
+    @mock.patch("wagtail_asset_publisher.utils.subprocess.run")
+    def test_terser_oserror_falls_back_to_rjsmin(
+        self, mock_run, _mock_setting, _mock_find
+    ):
+        """_optimize_js falls back to rjsmin when terser raises OSError.
+
+        Purpose: Verify that _optimize_js falls back to rjsmin and returns the
+                 minified result when terser raises OSError.
+        Category: Error case
+        Target: _optimize_js(content)
+        Technique: Decision coverage (C1) - OSError branch
+        Test data: OSError simulating terser binary not executable
+        """
+        mock_run.side_effect = OSError("Permission denied")
+        js_input = "var  a  =  1;"
+        mock_rjsmin = mock.Mock()
+        mock_rjsmin.jsmin.return_value = "var a=1;"
+
+        with mock.patch.dict("sys.modules", {"rjsmin": mock_rjsmin}):
+            result = _optimize_js(js_input)
+
+        assert result == "var a=1;"
+
+    @mock.patch("wagtail_asset_publisher.utils._find_terser", return_value=None)
+    def test_no_terser_with_rjsmin_returns_rjsmin_result(self, _mock_find):
+        """_optimize_js returns rjsmin result when terser is not found.
+
+        Purpose: Verify that _optimize_js falls back to rjsmin and returns the
+                 minified result when terser is not found.
+        Category: Normal case
+        Target: _optimize_js(content)
+        Technique: Decision coverage (C1) - terser not found branch
+        Test data: None returned from _find_terser simulating terser not found
+        """
+        js_input = "var  a  =  1;"
+        mock_rjsmin = mock.Mock()
+        mock_rjsmin.jsmin.return_value = "var a=1;"
+
+        with mock.patch.dict("sys.modules", {"rjsmin": mock_rjsmin}):
+            result = _optimize_js(js_input)
+
+        assert result == "var a=1;"
+
+    @mock.patch("wagtail_asset_publisher.utils._find_terser", return_value=None)
+    def test_no_terser_no_rjsmin_returns_original(self, _mock_find):
+        """_optimize_js returns the original content when neither terser nor rjsmin is available.
+
+        Purpose: Verify that _optimize_js returns the original content string
+                 unchanged when both terser and rjsmin are unavailable.
+        Category: Edge case
+        Target: _optimize_js(content)
+        Technique: Decision coverage (C1) - both unavailable branch
+        Test data: Neither external tool installed
+        """
+        js_input = "var  a  =  1;"
+
+        with mock.patch.dict("sys.modules", {"rjsmin": None}):
+            result = _optimize_js(js_input)
+
+        assert result == js_input
+
+    @mock.patch(
+        "wagtail_asset_publisher.utils._find_terser", return_value="/usr/bin/terser"
+    )
+    @mock.patch("wagtail_asset_publisher.utils.get_setting", return_value=["-c", "-m"])
+    @mock.patch("wagtail_asset_publisher.utils.subprocess.run")
+    def test_terser_failure_logs_warning(self, mock_run, _mock_setting, _mock_find):
+        """_optimize_js logs a warning when terser fails.
+
+        Purpose: Verify that _optimize_js emits a logger.warning to notify
+                 the fallback when terser raises an exception.
+        Category: Normal case
+        Target: _optimize_js(content)
+        Technique: Error guessing
+        Test data: terser CalledProcessError
+        """
+        import subprocess
+
+        mock_run.side_effect = subprocess.CalledProcessError(1, "terser")
+        mock_rjsmin = mock.Mock()
+        mock_rjsmin.jsmin.return_value = "var a=1;"
+
+        with (
+            mock.patch.dict("sys.modules", {"rjsmin": mock_rjsmin}),
+            mock.patch("wagtail_asset_publisher.utils.logger") as mock_logger,
+        ):
+            _optimize_js("var a = 1;")
+
+        mock_logger.warning.assert_called_once()
+        assert "terser failed" in mock_logger.warning.call_args[0][0]
+
+    @mock.patch("wagtail_asset_publisher.utils._find_terser", return_value=None)
+    def test_no_terser_no_rjsmin_logs_warning(self, _mock_find):
+        """_optimize_js logs a warning when neither terser nor rjsmin is available.
+
+        Purpose: Verify that _optimize_js emits a logger.warning to notify
+                 that optimization is skipped when both tools are unavailable.
+        Category: Edge case
+        Target: _optimize_js(content)
+        Technique: Error guessing
+        Test data: Neither external tool installed
+        """
+        with (
+            mock.patch.dict("sys.modules", {"rjsmin": None}),
+            mock.patch("wagtail_asset_publisher.utils.logger") as mock_logger,
+        ):
+            _optimize_js("var a = 1;")
+
+        mock_logger.warning.assert_called_once()
+        assert "Neither terser nor rjsmin" in mock_logger.warning.call_args[0][0]
+
+
+class TestMinifyCss:
+    """Tests for _minify_css() rcssmin fallback logic."""
+
+    def test_rcssmin_available_returns_minified(self):
+        """_minify_css returns the minified result when rcssmin is available.
+
+        Purpose: Verify that _minify_css returns the result of rcssmin.cssmin()
+                 when rcssmin is available.
+        Category: Normal case
+        Target: _minify_css(content)
+        Technique: Statement coverage (C0)
+        Test data: Simple CSS string
+        """
+        css_input = "body {  color:  red;  }"
+        mock_rcssmin = mock.Mock()
+        mock_rcssmin.cssmin.return_value = "body{color:red}"
+
+        with mock.patch.dict("sys.modules", {"rcssmin": mock_rcssmin}):
+            result = _minify_css(css_input)
+
+        assert result == "body{color:red}"
+
+    def test_rcssmin_not_available_returns_original(self):
+        """_minify_css returns the original content when rcssmin is not available.
+
+        Purpose: Verify that _minify_css returns the original content string
+                 unchanged when rcssmin raises an ImportError.
+        Category: Edge case
+        Target: _minify_css(content)
+        Technique: Decision coverage (C1) - ImportError branch
+        Test data: rcssmin not installed
+        """
+        css_input = "body {  color:  red;  }"
+
+        with mock.patch.dict("sys.modules", {"rcssmin": None}):
+            result = _minify_css(css_input)
+
+        assert result == css_input
+
+    def test_rcssmin_import_error_logs_warning(self):
+        """_minify_css logs a warning when rcssmin raises ImportError.
+
+        Purpose: Verify that _minify_css emits a logger.warning to notify
+                 that minification is skipped when rcssmin raises ImportError.
+        Category: Edge case
+        Target: _minify_css(content)
+        Technique: Error guessing
+        Test data: rcssmin not installed
+        """
+        with (
+            mock.patch.dict("sys.modules", {"rcssmin": None}),
+            mock.patch("wagtail_asset_publisher.utils.logger") as mock_logger,
+        ):
+            _minify_css("body { color: red; }")
+
+        mock_logger.warning.assert_called_once()
+        assert "rcssmin is not installed" in mock_logger.warning.call_args[0][0]
+
+
+class TestFindTerser:
+    """Tests for _find_terser() search priority logic."""
+
+    @mock.patch("wagtail_asset_publisher.utils.get_setting")
+    def test_explicit_terser_path_returns_immediately(self, mock_get_setting):
+        """_find_terser returns the TERSER_PATH setting immediately when configured.
+
+        Purpose: Verify that _find_terser returns the configured TERSER_PATH value
+                 without performing any further search.
+        Category: Normal case
+        Target: _find_terser()
+        Technique: Decision coverage (C1) - explicit path branch
+        Test data: Explicit terser path configured via TERSER_PATH setting
+        """
+        mock_get_setting.return_value = "/custom/path/terser"
+
+        result = _find_terser()
+
+        assert result == "/custom/path/terser"
+
+    @mock.patch("wagtail_asset_publisher.utils.shutil.which")
+    @mock.patch("wagtail_asset_publisher.utils.Path.exists", return_value=True)
+    @mock.patch("wagtail_asset_publisher.utils.get_setting", return_value=None)
+    def test_node_modules_terser_found(self, _mock_setting, _mock_exists, mock_which):
+        """_find_terser returns the path when terser exists in BASE_DIR/node_modules/.bin/.
+
+        Purpose: Verify that _find_terser returns the node_modules path when
+                 TERSER_PATH is not set and terser exists under BASE_DIR/node_modules.
+        Category: Normal case
+        Target: _find_terser()
+        Technique: Decision coverage (C1) - node_modules branch
+        Test data: BASE_DIR=/app, node_modules/.bin/terser present
+        """
+        with mock.patch("django.conf.settings") as mock_django_settings:
+            mock_django_settings.BASE_DIR = "/app"
+            result = _find_terser()
+
+        assert "node_modules" in result
+        assert result.endswith("terser")
+        mock_which.assert_not_called()
+
+    @mock.patch(
+        "wagtail_asset_publisher.utils.shutil.which",
+        return_value="/usr/local/bin/terser",
+    )
+    @mock.patch("wagtail_asset_publisher.utils.Path.exists", return_value=False)
+    @mock.patch("wagtail_asset_publisher.utils.get_setting", return_value=None)
+    def test_node_modules_not_found_falls_back_to_which(
+        self, _mock_setting, _mock_exists, mock_which
+    ):
+        """_find_terser falls back to shutil.which when terser is not in node_modules.
+
+        Purpose: Verify that _find_terser returns the result of shutil.which("terser")
+                 when terser is not found in node_modules.
+        Category: Normal case
+        Target: _find_terser()
+        Technique: Decision coverage (C1) - which fallback branch
+        Test data: node_modules absent, terser present in PATH
+        """
+        with mock.patch("django.conf.settings") as mock_django_settings:
+            mock_django_settings.BASE_DIR = "/app"
+            result = _find_terser()
+
+        assert result == "/usr/local/bin/terser"
+
+    @mock.patch(
+        "wagtail_asset_publisher.utils.shutil.which",
+        return_value="/usr/local/bin/terser",
+    )
+    @mock.patch("wagtail_asset_publisher.utils.get_setting", return_value=None)
+    def test_no_base_dir_falls_back_to_which(self, _mock_setting, mock_which):
+        """_find_terser falls back to shutil.which when BASE_DIR is not set.
+
+        Purpose: Verify that _find_terser skips the node_modules search and
+                 returns the shutil.which result when BASE_DIR is None.
+        Category: Edge case
+        Target: _find_terser()
+        Technique: Decision coverage (C1) - no BASE_DIR branch
+        Test data: BASE_DIR not defined
+        """
+        mock_settings_obj = mock.Mock(spec=[])
+
+        with mock.patch("django.conf.settings", mock_settings_obj):
+            result = _find_terser()
+
+        assert result == "/usr/local/bin/terser"
+
+    @mock.patch("wagtail_asset_publisher.utils.shutil.which", return_value=None)
+    @mock.patch("wagtail_asset_publisher.utils.get_setting", return_value=None)
+    def test_terser_not_found_anywhere_returns_none(self, _mock_setting, _mock_which):
+        """_find_terser returns None when terser is not found in any search path.
+
+        Purpose: Verify that _find_terser returns None when terser cannot be
+                 found through any of the available search paths.
+        Category: Edge case
+        Target: _find_terser()
+        Technique: Boundary value analysis - all paths exhausted
+        Test data: terser not installed
+        """
+        mock_settings_obj = mock.Mock(spec=[])
+
+        with mock.patch("django.conf.settings", mock_settings_obj):
+            result = _find_terser()
+
+        assert result is None
+
+
+class TestProcessCssMinification:
+    """Tests for MINIFY_CSS integration in _process_css."""
+
+    @mock.patch("wagtail_asset_publisher.utils.invalidate_cache")
+    @mock.patch(
+        "wagtail_asset_publisher.utils.compute_content_hash", return_value="min12345"
+    )
+    @mock.patch(
+        "wagtail_asset_publisher.utils._minify_css", return_value="body{color:red}"
+    )
+    @mock.patch("wagtail_asset_publisher.utils.extract_assets_from_page")
+    @mock.patch("wagtail_asset_publisher.utils.get_setting")
+    @mock.patch("wagtail_asset_publisher.utils.get_builder")
+    def test_minify_css_called_when_enabled(
+        self,
+        mock_get_builder,
+        mock_get_setting,
+        mock_extract,
+        mock_minify,
+        mock_hash,
+        mock_invalidate,
+    ):
+        """_process_css calls _minify_css when MINIFY_CSS is True.
+
+        Purpose: Verify that _process_css calls _minify_css on the build result
+                 when the MINIFY_CSS setting is True.
+        Category: Normal case
+        Target: _process_css(page, storage)
+        Technique: Decision coverage (C1) - MINIFY_CSS=True branch
+        Test data: MINIFY_CSS=True setting
+        """
+        page = mock.Mock(pk=42)
+        storage = mock.Mock()
+        storage.save.return_value = "/media/page-assets/css/42-min12345.css"
+
+        style = mock.Mock()
+        style.content = "body { color: red; }"
+        style.content_hash = "hash1"
+        mock_extract.return_value = ([style], [])
+
+        mock_builder = mock.Mock()
+        mock_builder.requires_html_content = False
+        mock_builder.build.return_value = "body { color: red; }"
+        mock_get_builder.return_value = mock_builder
+
+        mock_get_setting.side_effect = lambda key: {
+            "CSS_BUILDER": "wagtail_asset_publisher.builders.raw.RawAssetBuilder",
+            "MINIFY_CSS": True,
+            "HASH_LENGTH": 8,
+            "CSS_PREFIX": "page-assets/css/",
+        }[key]
+
+        with (
+            mock.patch("wagtail_asset_publisher.models.PublishedAsset"),
+            mock.patch("wagtail_asset_publisher.utils._clear_asset"),
+        ):
+            _process_css(page, storage)
+
+        mock_minify.assert_called_once_with("body { color: red; }")
+
+    @mock.patch("wagtail_asset_publisher.utils.invalidate_cache")
+    @mock.patch(
+        "wagtail_asset_publisher.utils.compute_content_hash", return_value="raw12345"
+    )
+    @mock.patch("wagtail_asset_publisher.utils._minify_css")
+    @mock.patch("wagtail_asset_publisher.utils.extract_assets_from_page")
+    @mock.patch("wagtail_asset_publisher.utils.get_setting")
+    @mock.patch("wagtail_asset_publisher.utils.get_builder")
+    def test_minify_css_not_called_when_disabled(
+        self,
+        mock_get_builder,
+        mock_get_setting,
+        mock_extract,
+        mock_minify,
+        mock_hash,
+        mock_invalidate,
+    ):
+        """_process_css does not call _minify_css when MINIFY_CSS is False.
+
+        Purpose: Verify that _process_css does not call _minify_css and uses
+                 the build result as-is when the MINIFY_CSS setting is False.
+        Category: Normal case
+        Target: _process_css(page, storage)
+        Technique: Decision coverage (C1) - MINIFY_CSS=False branch
+        Test data: MINIFY_CSS=False setting
+        """
+        page = mock.Mock(pk=42)
+        storage = mock.Mock()
+        storage.save.return_value = "/media/page-assets/css/42-raw12345.css"
+
+        style = mock.Mock()
+        style.content = "body { color: red; }"
+        style.content_hash = "hash1"
+        mock_extract.return_value = ([style], [])
+
+        mock_builder = mock.Mock()
+        mock_builder.requires_html_content = False
+        mock_builder.build.return_value = "body { color: red; }"
+        mock_get_builder.return_value = mock_builder
+
+        mock_get_setting.side_effect = lambda key: {
+            "CSS_BUILDER": "wagtail_asset_publisher.builders.raw.RawAssetBuilder",
+            "MINIFY_CSS": False,
+            "HASH_LENGTH": 8,
+            "CSS_PREFIX": "page-assets/css/",
+        }[key]
+
+        with (
+            mock.patch("wagtail_asset_publisher.models.PublishedAsset"),
+            mock.patch("wagtail_asset_publisher.utils._clear_asset"),
+        ):
+            _process_css(page, storage)
+
+        mock_minify.assert_not_called()
+
+
+class TestProcessJsOptimization:
+    """Tests for OBFUSCATE_JS integration in _process_js."""
+
+    @mock.patch("wagtail_asset_publisher.utils.invalidate_cache")
+    @mock.patch(
+        "wagtail_asset_publisher.utils.compute_content_hash", return_value="opt12345"
+    )
+    @mock.patch("wagtail_asset_publisher.utils._optimize_js", return_value="var a=1;")
+    @mock.patch("wagtail_asset_publisher.utils.extract_assets_from_page")
+    @mock.patch("wagtail_asset_publisher.utils.get_setting")
+    @mock.patch("wagtail_asset_publisher.utils.get_builder")
+    def test_optimize_js_called_when_enabled(
+        self,
+        mock_get_builder,
+        mock_get_setting,
+        mock_extract,
+        mock_optimize,
+        mock_hash,
+        mock_invalidate,
+    ):
+        """_process_js calls _optimize_js when OBFUSCATE_JS is True.
+
+        Purpose: Verify that _process_js calls _optimize_js on the build result
+                 when the OBFUSCATE_JS setting is True.
+        Category: Normal case
+        Target: _process_js(page, storage)
+        Technique: Decision coverage (C1) - OBFUSCATE_JS=True branch
+        Test data: OBFUSCATE_JS=True setting
+        """
+        page = mock.Mock(pk=42)
+        storage = mock.Mock()
+        storage.save.return_value = "/media/page-assets/js/42-opt12345.js"
+
+        script = mock.Mock()
+        script.content = "var  a  =  1;"
+        script.content_hash = "jshash1"
+        mock_extract.return_value = ([], [script])
+
+        mock_builder = mock.Mock()
+        mock_builder.build.return_value = "var  a  =  1;"
+        mock_get_builder.return_value = mock_builder
+
+        mock_get_setting.side_effect = lambda key: {
+            "JS_BUILDER": "wagtail_asset_publisher.builders.raw.RawAssetBuilder",
+            "OBFUSCATE_JS": True,
+            "HASH_LENGTH": 8,
+            "JS_PREFIX": "page-assets/js/",
+        }[key]
+
+        with (
+            mock.patch("wagtail_asset_publisher.models.PublishedAsset"),
+            mock.patch("wagtail_asset_publisher.utils._clear_asset"),
+        ):
+            _process_js(page, storage)
+
+        mock_optimize.assert_called_once_with("var  a  =  1;")
+
+    @mock.patch("wagtail_asset_publisher.utils.invalidate_cache")
+    @mock.patch(
+        "wagtail_asset_publisher.utils.compute_content_hash", return_value="raw12345"
+    )
+    @mock.patch("wagtail_asset_publisher.utils._optimize_js")
+    @mock.patch("wagtail_asset_publisher.utils.extract_assets_from_page")
+    @mock.patch("wagtail_asset_publisher.utils.get_setting")
+    @mock.patch("wagtail_asset_publisher.utils.get_builder")
+    def test_optimize_js_not_called_when_disabled(
+        self,
+        mock_get_builder,
+        mock_get_setting,
+        mock_extract,
+        mock_optimize,
+        mock_hash,
+        mock_invalidate,
+    ):
+        """_process_js does not call _optimize_js when OBFUSCATE_JS is False.
+
+        Purpose: Verify that _process_js does not call _optimize_js and uses
+                 the build result as-is when the OBFUSCATE_JS setting is False.
+        Category: Normal case
+        Target: _process_js(page, storage)
+        Technique: Decision coverage (C1) - OBFUSCATE_JS=False branch
+        Test data: OBFUSCATE_JS=False setting
+        """
+        page = mock.Mock(pk=42)
+        storage = mock.Mock()
+        storage.save.return_value = "/media/page-assets/js/42-raw12345.js"
+
+        script = mock.Mock()
+        script.content = "console.log('hello');"
+        script.content_hash = "jshash1"
+        mock_extract.return_value = ([], [script])
+
+        mock_builder = mock.Mock()
+        mock_builder.build.return_value = "console.log('hello');"
+        mock_get_builder.return_value = mock_builder
+
+        mock_get_setting.side_effect = lambda key: {
+            "JS_BUILDER": "wagtail_asset_publisher.builders.raw.RawAssetBuilder",
+            "OBFUSCATE_JS": False,
+            "HASH_LENGTH": 8,
+            "JS_PREFIX": "page-assets/js/",
+        }[key]
+
+        with (
+            mock.patch("wagtail_asset_publisher.models.PublishedAsset"),
+            mock.patch("wagtail_asset_publisher.utils._clear_asset"),
+        ):
+            _process_js(page, storage)
+
+        mock_optimize.assert_not_called()

@@ -33,6 +33,7 @@ wagtail-asset-publisher solves this transparently. When a page is published, inl
 - **Cross-package integration** -- Snippet publish triggers asset rebuild for all referencing pages via Wagtail's ReferenceIndex
 - **Preview support** -- Inline tags render naturally in preview mode; Tailwind CDN script is auto-injected when using Tailwind builder
 - **`data-no-extract` attribute** -- Mark inline tags to skip extraction and keep them inline
+- **Asset optimization** -- Optional CSS minification (rcssmin) and JS obfuscation (terser / rjsmin) with graceful fallbacks
 - **Strategy pattern architecture** -- Extend with custom builders and storage backends
 
 ## Installation
@@ -114,6 +115,11 @@ WAGTAIL_ASSET_PUBLISHER = {
     "TAILWIND_CONFIG": None,
     "TAILWIND_BASE_CSS": None,
     "TAILWIND_CDN_URL": "https://unpkg.com/@tailwindcss/browser@4",
+    # Asset optimization (requires pip install wagtail-asset-publisher[minify])
+    "MINIFY_CSS": True,
+    "OBFUSCATE_JS": False,
+    "TERSER_PATH": None,
+    "TERSER_OPTIONS": ["-c", "-m"],
 }
 ```
 
@@ -132,6 +138,10 @@ WAGTAIL_ASSET_PUBLISHER = {
 | `TAILWIND_CONFIG` | `None` | Path to Tailwind config file |
 | `TAILWIND_BASE_CSS` | `None` | Path to base input CSS file for Tailwind |
 | `TAILWIND_CDN_URL` | `"https://unpkg.com/@tailwindcss/browser@4"` | Tailwind CDN URL for preview mode |
+| `MINIFY_CSS` | `True` | Minify CSS output via rcssmin (requires `minify` extra) |
+| `OBFUSCATE_JS` | `False` | Minify/obfuscate JS output via terser or rjsmin (requires `minify` extra) |
+| `TERSER_PATH` | `None` | Explicit path to the terser binary (auto-detected if not set) |
+| `TERSER_OPTIONS` | `["-c", "-m"]` | CLI options passed to terser |
 
 ## Advanced Usage
 
@@ -190,6 +200,64 @@ This is useful for:
 ```
 
 External scripts (`<script src="...">`) are never extracted regardless of attributes.
+
+### Asset Optimization (CSS Minification and JS Obfuscation)
+
+Install the `minify` extra to enable built-in optimization:
+
+```bash
+pip install wagtail-asset-publisher[minify]
+```
+
+This installs `rcssmin` and `rjsmin`. For stronger JS minification, also install [terser](https://terser.org/) via npm:
+
+```bash
+npm install terser
+```
+
+#### CSS Minification
+
+CSS minification is **enabled by default** (`MINIFY_CSS: True`). It uses `rcssmin` to strip whitespace and comments from the built CSS output. If `rcssmin` is not installed, a warning is logged and the unminified output is used instead.
+
+To disable CSS minification:
+
+```python
+WAGTAIL_ASSET_PUBLISHER = {
+    "MINIFY_CSS": False,
+}
+```
+
+#### JS Optimization
+
+JS optimization is **disabled by default** (`OBFUSCATE_JS: False`). When enabled, the following fallback chain is used:
+
+1. **terser** (CLI) -- full minification with dead-code elimination and identifier mangling
+2. **rjsmin** (Python) -- whitespace and comment stripping; used if terser is not found
+3. **no optimization** -- a warning is logged and the original output is used if neither tool is available
+
+To enable JS optimization:
+
+```python
+WAGTAIL_ASSET_PUBLISHER = {
+    "OBFUSCATE_JS": True,
+}
+```
+
+**Terser binary discovery order:**
+
+1. `TERSER_PATH` setting (explicit path)
+2. `{BASE_DIR}/node_modules/.bin/terser` (local npm install)
+3. `terser` on the system `PATH`
+
+To point to a specific terser binary:
+
+```python
+WAGTAIL_ASSET_PUBLISHER = {
+    "OBFUSCATE_JS": True,
+    "TERSER_PATH": "/path/to/node_modules/.bin/terser",
+    "TERSER_OPTIONS": ["-c", "-m"],  # compress + mangle (default)
+}
+```
 
 ### Tailwind CSS JIT Mode
 
@@ -367,6 +435,26 @@ This is useful after:
 5. Confirm `STATICFILES_DIRS` is configured (required by `django-tailwind-cli`)
 6. In Docker/CI environments, run `python manage.py tailwind download_cli` to download the binary
 7. The builder logs the error and falls back gracefully to raw CSS
+
+### CSS Not Being Minified
+
+**Issue**: Published CSS files are not minified even though `MINIFY_CSS` is `True`.
+
+**Solutions**:
+1. Install the `minify` extra: `pip install wagtail-asset-publisher[minify]`
+2. Check Django logs for a warning message containing `rcssmin is not installed`
+
+### JS Not Being Optimized
+
+**Issue**: Published JS files are not minified even though `OBFUSCATE_JS` is `True`.
+
+**Solutions**:
+1. Install the `minify` extra: `pip install wagtail-asset-publisher[minify]`
+2. For terser-level optimization, ensure terser is available: `npm install terser` or `npm install -g terser`
+3. Check Django logs for warnings -- the fallback chain logs each step:
+   - `terser failed: ...` means terser was found but errored; rjsmin will be tried
+   - `Neither terser nor rjsmin is available. JS optimization skipped.` means neither tool is installed
+4. Set `TERSER_PATH` explicitly if terser is installed at a non-standard location
 
 ### Snippet Publish Not Rebuilding Pages
 

@@ -17,6 +17,9 @@ class PublishedAsset(models.Model):
     Cleaned up automatically via CASCADE on page delete.
     """
 
+    objects: models.Manager[PublishedAsset]
+    page_id: int
+
     page = models.ForeignKey(
         "wagtailcore.Page",
         on_delete=models.CASCADE,
