@@ -2,15 +2,20 @@
 
 Covers AssetPublisherMiddleware, helper functions (_is_preview_request,
 _get_page, _get_published_assets, _process_html, _strip_matching_tags,
-_escape_attr, _minify_html), and invalidate_cache.
+_escape_attr, _minify_html), invalidate_cache, and script loading
+attribute injection.
 """
 
 import logging
 import sys
 from unittest import mock
 
+import pytest
+
 from wagtail_asset_publisher.extractors import compute_content_hash
 from wagtail_asset_publisher.middleware import (
+    _JS_LOADING_ATTRS,
+    _JS_LOADING_ORDER,
     CACHE_KEY_PREFIX,
     CACHE_TIMEOUT,
     AssetPublisherMiddleware,
@@ -173,8 +178,8 @@ class TestGetPublishedAssets:
 
     @mock.patch("wagtail_asset_publisher.middleware.cache")
     @mock.patch("wagtail_asset_publisher.models.PublishedAsset")
-    def test_queries_db_on_cache_miss(self, MockPublishedAsset, mock_cache):
-        """Queries DB and populates cache on cache miss.
+    def test_queries_db_on_cache_miss_css(self, MockPublishedAsset, mock_cache):
+        """Queries DB and populates cache on cache miss (CSS).
 
         Purpose: Verify that a cache miss triggers a DB lookup and the
             result is cached for subsequent requests.
@@ -199,6 +204,85 @@ class TestGetPublishedAssets:
         mock_cache.set.assert_called_once_with(
             f"{CACHE_KEY_PREFIX}42", result, CACHE_TIMEOUT
         )
+
+    @mock.patch("wagtail_asset_publisher.middleware.cache")
+    @mock.patch("wagtail_asset_publisher.models.PublishedAsset")
+    def test_queries_db_on_cache_miss_js(self, MockPublishedAsset, mock_cache):
+        """Queries DB and populates cache on cache miss (JS as list).
+
+        Purpose: Verify that JS assets are returned as a list of per-loading
+            entries when fetched from the DB on cache miss.
+        Category: Normal case
+        Target: _get_published_assets(page_id)
+        Technique: Equivalence partitioning (cache miss, JS structure)
+        Test data: Empty cache, one JS asset in DB
+        """
+        mock_cache.get.return_value = None
+
+        mock_asset = mock.Mock()
+        mock_asset.asset_type = "js"
+        mock_asset.url = "https://cdn/b.js"
+        mock_asset.content_hashes = ["jshash1"]
+        mock_asset.loading = "defer"
+        MockPublishedAsset.objects.filter.return_value = [mock_asset]
+
+        result = _get_published_assets(42)
+
+        assert "js" in result
+        assert isinstance(result["js"], list)
+        assert len(result["js"]) == 1
+        assert result["js"][0]["url"] == "https://cdn/b.js"
+        assert result["js"][0]["loading"] == "defer"
+
+    @mock.patch("wagtail_asset_publisher.middleware.cache")
+    @mock.patch("wagtail_asset_publisher.models.PublishedAsset")
+    def test_queries_db_on_cache_miss_multiple_js_loading(
+        self, MockPublishedAsset, mock_cache
+    ):
+        """Multiple JS assets with different loading strategies are returned as a list.
+
+        Purpose: Verify that _get_published_assets returns JS assets with
+            different loading strategies as a properly structured list,
+            one entry per loading group.
+        Category: Normal case
+        Target: _get_published_assets(page_id)
+        Technique: Equivalence partitioning (multiple loading strategies in JS structure)
+        Test data: Three JS assets: blocking, defer, module
+        """
+        mock_cache.get.return_value = None
+
+        asset_blocking = mock.Mock()
+        asset_blocking.asset_type = "js"
+        asset_blocking.url = "https://cdn/blocking.js"
+        asset_blocking.content_hashes = ["hash1"]
+        asset_blocking.loading = ""
+
+        asset_defer = mock.Mock()
+        asset_defer.asset_type = "js"
+        asset_defer.url = "https://cdn/defer.js"
+        asset_defer.content_hashes = ["hash2"]
+        asset_defer.loading = "defer"
+
+        asset_module = mock.Mock()
+        asset_module.asset_type = "js"
+        asset_module.url = "https://cdn/module.js"
+        asset_module.content_hashes = ["hash3"]
+        asset_module.loading = "module"
+
+        MockPublishedAsset.objects.filter.return_value = [
+            asset_blocking,
+            asset_defer,
+            asset_module,
+        ]
+
+        result = _get_published_assets(42)
+
+        assert "js" in result
+        assert isinstance(result["js"], list)
+        assert len(result["js"]) == 3
+
+        loadings = {entry["loading"] for entry in result["js"]}
+        assert loadings == {"", "defer", "module"}
 
     @mock.patch("wagtail_asset_publisher.middleware.cache")
     @mock.patch("wagtail_asset_publisher.models.PublishedAsset")
@@ -253,14 +337,17 @@ class TestProcessHtml:
         Category: Normal case
         Target: _process_html(html, assets)
         Technique: Equivalence partitioning
-        Test data: Full HTML with </body> and JS asset
+        Test data: Full HTML with </body> and JS asset (list format)
         """
         html = "<html><head></head><body><p>Hi</p></body></html>"
         assets = {
-            "js": {
-                "url": "https://cdn/page.js",
-                "content_hashes": set(),
-            },
+            "js": [
+                {
+                    "url": "https://cdn/page.js",
+                    "content_hashes": set(),
+                    "loading": "",
+                },
+            ],
         }
 
         result = _process_html(html, assets)
@@ -280,13 +367,186 @@ class TestProcessHtml:
         html = "<html><head></head><body></body></html>"
         assets = {
             "css": {"url": "https://cdn/p.css", "content_hashes": set()},
-            "js": {"url": "https://cdn/p.js", "content_hashes": set()},
+            "js": [
+                {
+                    "url": "https://cdn/p.js",
+                    "content_hashes": set(),
+                    "loading": "",
+                },
+            ],
         }
 
         result = _process_html(html, assets)
 
         assert '<link rel="stylesheet" href="https://cdn/p.css">' in result
         assert '<script src="https://cdn/p.js"></script>' in result
+
+
+class TestProcessHtmlJsLoadingAttrs:
+    """Tests for JS script tag injection with loading attributes.
+
+    ## Decision Table: DT-JS-INJECTION
+
+    | ID  | loading        | Expected attrs           |
+    |-----|----------------|--------------------------|
+    | DT1 | ""             | (none)                   |
+    | DT2 | "defer"        | defer                    |
+    | DT3 | "async"        | async                    |
+    | DT4 | "module"       | type="module"            |
+    | DT5 | "module-async" | type="module" async      |
+    """
+
+    @pytest.mark.parametrize(
+        "loading,expected_tag",
+        [
+            pytest.param(
+                "",
+                '<script src="https://cdn/p.js"></script>',
+                id="DT1-blocking-no-attrs",
+            ),
+            pytest.param(
+                "defer",
+                '<script src="https://cdn/p.js" defer></script>',
+                id="DT2-defer-attr",
+            ),
+            pytest.param(
+                "async",
+                '<script src="https://cdn/p.js" async></script>',
+                id="DT3-async-attr",
+            ),
+            pytest.param(
+                "module",
+                '<script src="https://cdn/p.js" type="module"></script>',
+                id="DT4-module-type",
+            ),
+            pytest.param(
+                "module-async",
+                '<script src="https://cdn/p.js" type="module" async></script>',
+                id="DT5-module-async-type-and-attr",
+            ),
+        ],
+    )
+    def test_js_script_injected_with_loading_attrs(self, loading, expected_tag):
+        """Script tag is injected with correct HTML attributes for each loading value (DT-JS-INJECTION).
+
+        Purpose: Verify that _process_html injects script tags with the correct
+            HTML attributes (defer, async, type="module") based on the JS asset's
+            loading value.
+        Category: Normal case
+        Target: _process_html(html, assets)
+        Technique: Decision table
+        Test data: All patterns from DT-JS-INJECTION
+        """
+        html = "<html><head></head><body></body></html>"
+        assets = {
+            "js": [
+                {
+                    "url": "https://cdn/p.js",
+                    "content_hashes": set(),
+                    "loading": loading,
+                },
+            ],
+        }
+
+        result = _process_html(html, assets)
+
+        assert expected_tag in result
+
+    def test_multiple_loading_strategies_injection_order(self):
+        """Script tags with multiple loading strategies are injected in the correct order.
+
+        Purpose: Verify that script tags are injected in the defined order:
+            blocking -> defer -> module -> async -> module-async,
+            ensuring predictable script execution ordering.
+        Category: Normal case
+        Target: _process_html(html, assets)
+        Technique: State transition (injection order verification)
+        Test data: Five JS assets with different loading strategies
+        """
+        html = "<html><head></head><body></body></html>"
+        assets = {
+            "js": [
+                {
+                    "url": "https://cdn/module-async.js",
+                    "content_hashes": set(),
+                    "loading": "module-async",
+                },
+                {
+                    "url": "https://cdn/async.js",
+                    "content_hashes": set(),
+                    "loading": "async",
+                },
+                {
+                    "url": "https://cdn/blocking.js",
+                    "content_hashes": set(),
+                    "loading": "",
+                },
+                {
+                    "url": "https://cdn/defer.js",
+                    "content_hashes": set(),
+                    "loading": "defer",
+                },
+                {
+                    "url": "https://cdn/module.js",
+                    "content_hashes": set(),
+                    "loading": "module",
+                },
+            ],
+        }
+
+        result = _process_html(html, assets)
+
+        blocking_pos = result.index("blocking.js")
+        defer_pos = result.index("defer.js")
+        module_pos = result.index("module.js")
+        async_pos = result.index("async.js")
+        module_async_pos = result.index("module-async.js")
+
+        assert blocking_pos < defer_pos
+        assert defer_pos < module_pos
+        assert module_pos < async_pos
+        assert async_pos < module_async_pos
+
+    def test_single_blocking_js_no_extra_attrs(self):
+        """Blocking (loading="") script tag has no defer/async/type attributes.
+
+        Purpose: Verify that a JS asset with loading="" is injected without
+            any extra attributes.
+        Category: Normal case
+        Target: _process_html(html, assets)
+        Technique: Equivalence partitioning (blocking class verification)
+        Test data: JS asset with loading=""
+        """
+        html = "<html><head></head><body></body></html>"
+        assets = {
+            "js": [
+                {
+                    "url": "https://cdn/blocking.js",
+                    "content_hashes": set(),
+                    "loading": "",
+                },
+            ],
+        }
+
+        result = _process_html(html, assets)
+
+        assert '<script src="https://cdn/blocking.js"></script>' in result
+        assert "defer" not in result
+        assert "async" not in result
+        assert "module" not in result
+
+    def test_js_loading_attrs_mapping_completeness(self):
+        """_JS_LOADING_ATTRS has a mapping for every entry in _JS_LOADING_ORDER.
+
+        Purpose: Verify that _JS_LOADING_ATTRS provides a mapping for all
+            loading values defined in _JS_LOADING_ORDER.
+        Category: Normal case
+        Target: _JS_LOADING_ATTRS, _JS_LOADING_ORDER
+        Technique: Equivalence partitioning (mapping completeness)
+        Test data: All entries in _JS_LOADING_ORDER
+        """
+        for loading in _JS_LOADING_ORDER:
+            assert loading in _JS_LOADING_ATTRS
 
 
 class TestStripMatchingTags:
