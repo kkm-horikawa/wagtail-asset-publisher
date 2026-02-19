@@ -12,6 +12,15 @@ class ExtractedAsset(NamedTuple):
 
     content: str
     content_hash: str
+    loading: str = ""  # "", "defer", "async", "module", "module-async"
+
+
+_JS_MIME_TYPES = frozenset(
+    {
+        "text/javascript",
+        "application/javascript",
+    }
+)
 
 
 class AssetExtractor(HTMLParser):
@@ -29,6 +38,7 @@ class AssetExtractor(HTMLParser):
         self._current_content: list[str] = []
         self._skip_current: bool = False
         self._is_external_script: bool = False
+        self._current_loading: str = ""
 
     @property
     def styles(self) -> list[ExtractedAsset]:
@@ -56,6 +66,10 @@ class AssetExtractor(HTMLParser):
 
         self._skip_current = False
         self._is_external_script = False
+        self._current_loading = ""
+
+        if tag == "script":
+            self._current_loading = self._resolve_loading_strategy(attr_dict)
 
     def handle_data(self, data: str) -> None:
         if (
@@ -72,19 +86,58 @@ class AssetExtractor(HTMLParser):
         if not self._skip_current and not self._is_external_script:
             content = "".join(self._current_content).strip()
             if content:
-                asset = ExtractedAsset(
-                    content=content,
-                    content_hash=compute_content_hash(content),
-                )
                 if tag == "style":
+                    asset = ExtractedAsset(
+                        content=content,
+                        content_hash=compute_content_hash(content),
+                    )
                     self._styles.append(asset)
                 elif tag == "script":
+                    asset = ExtractedAsset(
+                        content=content,
+                        content_hash=compute_content_hash(content),
+                        loading=self._current_loading,
+                    )
                     self._scripts.append(asset)
 
         self._current_tag = None
         self._current_content = []
         self._skip_current = False
         self._is_external_script = False
+        self._current_loading = ""
+
+    def _resolve_loading_strategy(self, attr_dict: dict[str, str | None]) -> str:
+        """Determine the loading strategy from <script> tag attributes.
+
+        Returns one of: "", "defer", "async", "module", "module-async".
+        Sets ``_skip_current = True`` for non-JS types (importmap, etc.)
+        so the tag is left inline.
+        """
+        type_attr = (attr_dict.get("type") or "").strip().lower()
+
+        if not type_attr:
+            pass  # missing/empty type → normal JS
+        elif type_attr == "module":
+            pass  # handled below
+        elif type_attr in _JS_MIME_TYPES:
+            pass  # explicit MIME type → still normal JS
+        else:
+            # Non-JS type (importmap, speculationrules, etc.) -- skip extraction
+            self._skip_current = True
+            return ""
+
+        has_async = "async" in attr_dict
+        has_defer = "defer" in attr_dict
+
+        if type_attr == "module":
+            return "module-async" if has_async else "module"
+
+        # Per HTML spec, async takes precedence when both are present
+        if has_async:
+            return "async"
+        if has_defer:
+            return "defer"
+        return ""
 
 
 def compute_content_hash(content: str, length: int = 8) -> str:
