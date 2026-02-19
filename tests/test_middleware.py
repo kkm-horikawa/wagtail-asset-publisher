@@ -490,6 +490,7 @@ class TestMiddlewareCallPassThrough:
         request = mock.Mock()
         response = mock.Mock()
         response.get.return_value = "text/html; charset=utf-8"
+        response.streaming = False
         mock_is_preview.return_value = False
         mock_get_page.return_value = None
 
@@ -522,6 +523,7 @@ class TestMiddlewareCallPassThrough:
 
         response = mock.Mock()
         response.get.return_value = "text/html; charset=utf-8"
+        response.streaming = False
 
         mock_is_preview.return_value = False
         mock_get_page.return_value = page
@@ -560,6 +562,7 @@ class TestMiddlewareCallPassThrough:
         response = mock.MagicMock()
         response.get.return_value = "text/html; charset=utf-8"
         response.charset = "utf-8"
+        response.streaming = False
         response.content = original_html.encode("utf-8")
 
         mock_is_preview.return_value = False
@@ -599,6 +602,7 @@ class TestMiddlewarePreview:
         request = mock.Mock()
         response = mock.Mock()
         response.get.return_value = "text/html; charset=utf-8"
+        response.streaming = False
 
         mock_is_preview.return_value = True
         mock_handle_preview.return_value = response

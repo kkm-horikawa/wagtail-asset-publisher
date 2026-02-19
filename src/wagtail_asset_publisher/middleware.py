@@ -36,6 +36,9 @@ class AssetPublisherMiddleware:
         if "text/html" not in content_type:
             return response
 
+        if response.streaming:
+            return response
+
         if _is_preview_request(request):
             return _handle_preview(response)
 
@@ -174,13 +177,19 @@ def _minify_html(html: str) -> str:
     except ImportError:
         return html
 
-    return minify_html.minify(  # type: ignore[no-any-return]
-        html,
-        minify_css=True,
-        minify_js=True,
-        keep_closing_tags=True,
-        keep_html_and_head_opening_tags=True,
-    )
+    try:
+        return minify_html.minify(
+            html,
+            minify_css=True,
+            minify_js=True,
+            keep_closing_tags=True,
+            keep_html_and_head_opening_tags=True,
+        )
+    except Exception:
+        logger.warning(
+            "HTML minification failed, returning original HTML", exc_info=True
+        )
+        return html
 
 
 def _compute_hash(content: str) -> str:
