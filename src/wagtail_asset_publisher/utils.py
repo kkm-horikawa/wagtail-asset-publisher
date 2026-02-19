@@ -163,12 +163,16 @@ def _find_terser() -> str | None:
 
     Search order: TERSER_PATH setting -> node_modules/.bin/terser -> PATH.
     """
-    explicit = get_setting("TERSER_PATH")
+    explicit: str | None = get_setting("TERSER_PATH")
     if explicit:
-        return explicit  # type: ignore[no-any-return]
-    local = Path("node_modules/.bin/terser")
-    if local.exists():
-        return str(local)
+        return explicit
+    from django.conf import settings as django_settings
+
+    base_dir = getattr(django_settings, "BASE_DIR", None)
+    if base_dir is not None:
+        local = Path(base_dir) / "node_modules" / ".bin" / "terser"
+        if local.exists():
+            return str(local)
     return shutil.which("terser")
 
 
