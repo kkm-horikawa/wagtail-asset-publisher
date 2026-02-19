@@ -137,7 +137,7 @@ WAGTAIL_ASSET_PUBLISHER = {
 
 ### HTML Minification
 
-wagtail-asset-publisher can minify HTML responses to reduce page payload size. Minification is performed by the [minify-html](https://github.com/wilfred/minify-html) library, which also minifies inline CSS and JavaScript.
+wagtail-asset-publisher can minify HTML responses to reduce page payload size. Minification is performed by the [minify-html](https://github.com/wilsonzlin/minify-html) library, which also minifies inline CSS and JavaScript.
 
 Install the optional dependency:
 

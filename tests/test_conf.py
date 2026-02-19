@@ -189,6 +189,7 @@ class TestDefaultValues:
             "TAILWIND_CLI_PATH",
             "TAILWIND_CONFIG",
             "TAILWIND_BASE_CSS",
+            "MINIFY_HTML",
         }
 
         assert required_keys.issubset(set(DEFAULTS.keys()))
