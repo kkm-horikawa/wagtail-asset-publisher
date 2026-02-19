@@ -846,7 +846,9 @@ class TestMinifyHtml:
         mock_minify_module.minify.side_effect = RuntimeError("minification failed")
 
         with mock.patch.dict("sys.modules", {"minify_html": mock_minify_module}):
-            with caplog.at_level(logging.WARNING, logger="wagtail_asset_publisher.middleware"):
+            with caplog.at_level(
+                logging.WARNING, logger="wagtail_asset_publisher.middleware"
+            ):
                 result = _minify_html(html)
 
         assert result == html
