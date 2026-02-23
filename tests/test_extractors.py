@@ -915,9 +915,7 @@ class TestGetPageHtmlForTailwind:
             mock.patch("wagtail.models.Page", FakePage),
             mock.patch("django.contrib.auth.models.AnonymousUser"),
             mock.patch("django.test.RequestFactory") as mock_rf,
-            mock.patch(
-                "wagtail_asset_publisher.extractors.logger"
-            ) as mock_logger,
+            mock.patch("wagtail_asset_publisher.extractors.logger") as mock_logger,
         ):
             mock_request = mock.Mock()
             mock_request.META = {
@@ -982,9 +980,7 @@ class TestGetPageHtmlForTailwind:
             ),
             mock.patch("django.contrib.auth.models.AnonymousUser"),
             mock.patch("django.test.RequestFactory") as mock_rf,
-            mock.patch(
-                "wagtail_asset_publisher.extractors.logger"
-            ) as mock_logger,
+            mock.patch("wagtail_asset_publisher.extractors.logger") as mock_logger,
         ):
             mock_request = mock.Mock()
             mock_request.META = {

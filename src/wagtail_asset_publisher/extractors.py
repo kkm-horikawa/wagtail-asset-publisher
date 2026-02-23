@@ -237,7 +237,7 @@ def _get_page_hostname(page: object) -> str:
     try:
         site = page.get_site()  # type: ignore[attr-defined]
         if site is not None:
-            return site.hostname
+            return str(site.hostname)
     except Exception:
         pass
     return _DEFAULT_HOSTNAME
