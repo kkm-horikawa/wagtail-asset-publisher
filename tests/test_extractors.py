@@ -11,9 +11,11 @@ import pytest
 
 from wagtail_asset_publisher.extractors import (
     ExtractedAsset,
+    _get_page_hostname,
     compute_content_hash,
     extract_assets,
     extract_assets_from_page,
+    get_page_html_for_tailwind,
 )
 
 
@@ -719,3 +721,281 @@ class TestExtractAssetsFromPage:
 
         assert styles == []
         assert scripts == []
+
+
+class TestGetPageHostname:
+    """Tests for _get_page_hostname helper function."""
+
+    def test_returns_site_hostname(self):
+        """Returns the hostname from the page's associated site.
+
+        Purpose: Verify that _get_page_hostname extracts the hostname from
+            page.get_site().hostname when a site is available.
+        Category: Normal case
+        Target: _get_page_hostname(page)
+        Technique: Equivalence partitioning (page with valid site)
+        Test data: Mock page with site hostname "example.com"
+        """
+        mock_site = mock.Mock()
+        mock_site.hostname = "example.com"
+        mock_page = mock.Mock()
+        mock_page.get_site.return_value = mock_site
+
+        result = _get_page_hostname(mock_page)
+
+        assert result == "example.com"
+
+    def test_returns_fallback_when_get_site_returns_none(self):
+        """Returns fallback hostname when page.get_site() returns None.
+
+        Purpose: Verify graceful fallback when a page has no associated site
+            (e.g. orphaned page not in any site's page tree).
+        Category: Edge case
+        Target: _get_page_hostname(page)
+        Technique: Boundary value analysis (no site association)
+        Test data: Mock page whose get_site() returns None
+        """
+        mock_page = mock.Mock()
+        mock_page.get_site.return_value = None
+
+        result = _get_page_hostname(mock_page)
+
+        assert result == "localhost"
+
+    def test_returns_fallback_when_get_site_raises(self):
+        """Returns fallback hostname when page.get_site() raises an exception.
+
+        Purpose: Verify graceful fallback when get_site() raises (e.g.
+            wagtail.models.Site.DoesNotExist for pages outside all site trees).
+        Category: Error case
+        Target: _get_page_hostname(page)
+        Technique: Error guessing (site lookup failure)
+        Test data: Mock page whose get_site() raises an exception
+        """
+        mock_page = mock.Mock()
+        mock_page.get_site.side_effect = Exception("Site.DoesNotExist")
+
+        result = _get_page_hostname(mock_page)
+
+        assert result == "localhost"
+
+
+class TestGetPageHtmlForTailwind:
+    """Tests for get_page_html_for_tailwind with hostname and error handling."""
+
+    def _make_fake_page_class(self):
+        """Create a fake Page class that mock pages can pass isinstance() check."""
+
+        class FakePageMeta(type):
+            def __instancecheck__(cls, instance):
+                return getattr(instance, "_is_page", False)
+
+        class FakePage(metaclass=FakePageMeta):
+            pass
+
+        return FakePage
+
+    def test_sets_hostname_from_page_site(self):
+        """Request hostname is set from page.get_site().hostname.
+
+        Purpose: Verify that the request's HTTP_HOST and SERVER_NAME are set
+            to the page's site hostname, preventing DisallowedHost errors when
+            templates call request.build_absolute_uri() or request.get_host().
+        Category: Normal case
+        Target: get_page_html_for_tailwind(page)
+        Technique: Equivalence partitioning (page with valid site)
+        Test data: Mock page with site hostname "prod.example.com"
+        """
+        FakePage = self._make_fake_page_class()
+
+        mock_site = mock.Mock()
+        mock_site.hostname = "prod.example.com"
+
+        mock_page = mock.Mock()
+        mock_page._is_page = True
+        mock_page.get_site.return_value = mock_site
+        mock_page.get_template.return_value = "test.html"
+        mock_page.get_context.return_value = {}
+
+        captured_request = {}
+
+        def capture_render(template, context, request=None):
+            captured_request["HTTP_HOST"] = request.META["HTTP_HOST"]
+            captured_request["SERVER_NAME"] = request.META["SERVER_NAME"]
+            return "<html>rendered</html>"
+
+        with (
+            mock.patch("wagtail.models.Page", FakePage),
+            mock.patch(
+                "django.template.loader.render_to_string",
+                side_effect=capture_render,
+            ),
+            mock.patch("django.contrib.auth.models.AnonymousUser"),
+            mock.patch("django.test.RequestFactory") as mock_rf,
+        ):
+            mock_request = mock.Mock()
+            mock_request.META = {
+                "HTTP_HOST": "testserver",
+                "SERVER_NAME": "testserver",
+            }
+            mock_rf.return_value.get.return_value = mock_request
+
+            result = get_page_html_for_tailwind(mock_page)
+
+        assert result == "<html>rendered</html>"
+        assert captured_request["HTTP_HOST"] == "prod.example.com"
+        assert captured_request["SERVER_NAME"] == "prod.example.com"
+
+    def test_uses_fallback_hostname_when_site_unavailable(self):
+        """Request hostname falls back to localhost when site is unavailable.
+
+        Purpose: Verify that when page.get_site() raises an exception,
+            the request is still created with a valid fallback hostname.
+        Category: Edge case
+        Target: get_page_html_for_tailwind(page)
+        Technique: Error guessing (site lookup failure during rendering)
+        Test data: Mock page whose get_site() raises Exception
+        """
+        FakePage = self._make_fake_page_class()
+
+        mock_page = mock.Mock()
+        mock_page._is_page = True
+        mock_page.get_site.side_effect = Exception("Site.DoesNotExist")
+        mock_page.get_template.return_value = "test.html"
+        mock_page.get_context.return_value = {}
+
+        captured_request = {}
+
+        def capture_render(template, context, request=None):
+            captured_request["HTTP_HOST"] = request.META["HTTP_HOST"]
+            return "<html>fallback</html>"
+
+        with (
+            mock.patch("wagtail.models.Page", FakePage),
+            mock.patch(
+                "django.template.loader.render_to_string",
+                side_effect=capture_render,
+            ),
+            mock.patch("django.contrib.auth.models.AnonymousUser"),
+            mock.patch("django.test.RequestFactory") as mock_rf,
+        ):
+            mock_request = mock.Mock()
+            mock_request.META = {
+                "HTTP_HOST": "testserver",
+                "SERVER_NAME": "testserver",
+            }
+            mock_rf.return_value.get.return_value = mock_request
+
+            result = get_page_html_for_tailwind(mock_page)
+
+        assert result == "<html>fallback</html>"
+        assert captured_request["HTTP_HOST"] == "localhost"
+
+    def test_returns_empty_string_on_render_exception(self):
+        """Returns empty string when rendering raises an exception.
+
+        Purpose: Verify graceful degradation when the page template render
+            fails for any reason (e.g. template syntax error, missing context
+            variable). The function should log a warning and return an empty
+            string instead of propagating the exception.
+        Category: Error case
+        Target: get_page_html_for_tailwind(page)
+        Technique: Error guessing (render failure)
+        Test data: Mock page whose get_template() raises RuntimeError
+        """
+        FakePage = self._make_fake_page_class()
+
+        mock_page = mock.Mock()
+        mock_page._is_page = True
+        mock_page.pk = 42
+        mock_page.get_site.return_value = mock.Mock(hostname="example.com")
+        mock_page.get_template.side_effect = RuntimeError("template broken")
+
+        with (
+            mock.patch("wagtail.models.Page", FakePage),
+            mock.patch("django.contrib.auth.models.AnonymousUser"),
+            mock.patch("django.test.RequestFactory") as mock_rf,
+            mock.patch(
+                "wagtail_asset_publisher.extractors.logger"
+            ) as mock_logger,
+        ):
+            mock_request = mock.Mock()
+            mock_request.META = {
+                "HTTP_HOST": "testserver",
+                "SERVER_NAME": "testserver",
+            }
+            mock_rf.return_value.get.return_value = mock_request
+
+            result = get_page_html_for_tailwind(mock_page)
+
+        assert result == ""
+        mock_logger.warning.assert_called_once()
+        assert "Failed to render page" in mock_logger.warning.call_args[0][0]
+
+    def test_returns_empty_string_for_non_page_instance(self):
+        """Returns empty string for objects that are not Wagtail Page instances.
+
+        Purpose: Verify that non-Page objects are rejected early without
+            attempting rendering.
+        Category: Edge case
+        Target: get_page_html_for_tailwind(page)
+        Technique: Equivalence partitioning (non-Page input)
+        Test data: Plain Python object (not a Page)
+        """
+        FakePage = self._make_fake_page_class()
+
+        non_page = mock.Mock()
+        non_page._is_page = False
+
+        with mock.patch("wagtail.models.Page", FakePage):
+            result = get_page_html_for_tailwind(non_page)
+
+        assert result == ""
+
+    def test_render_to_string_exception_logs_page_info(self):
+        """Warning log includes page class name and pk for debugging.
+
+        Purpose: Verify that the warning log message contains enough context
+            (class name, pk) for operators to identify which page failed
+            rendering during Tailwind CSS scanning.
+        Category: Error case
+        Target: get_page_html_for_tailwind(page) logging behavior
+        Technique: Error guessing (logging content verification)
+        Test data: Mock page pk=99 raising during render_to_string
+        """
+        FakePage = self._make_fake_page_class()
+
+        mock_site = mock.Mock()
+        mock_site.hostname = "example.com"
+        mock_page = mock.Mock()
+        mock_page._is_page = True
+        mock_page.pk = 99
+        mock_page.get_site.return_value = mock_site
+        mock_page.get_template.return_value = "page.html"
+        mock_page.get_context.return_value = {}
+
+        with (
+            mock.patch("wagtail.models.Page", FakePage),
+            mock.patch(
+                "django.template.loader.render_to_string",
+                side_effect=ValueError("context error"),
+            ),
+            mock.patch("django.contrib.auth.models.AnonymousUser"),
+            mock.patch("django.test.RequestFactory") as mock_rf,
+            mock.patch(
+                "wagtail_asset_publisher.extractors.logger"
+            ) as mock_logger,
+        ):
+            mock_request = mock.Mock()
+            mock_request.META = {
+                "HTTP_HOST": "testserver",
+                "SERVER_NAME": "testserver",
+            }
+            mock_rf.return_value.get.return_value = mock_request
+
+            result = get_page_html_for_tailwind(mock_page)
+
+        assert result == ""
+        warning_args = mock_logger.warning.call_args[0]
+        assert "Failed to render page" in warning_args[0]
+        assert warning_args[2] == 99

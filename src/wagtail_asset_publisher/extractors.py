@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 from html.parser import HTMLParser
 from typing import NamedTuple
+
+logger = logging.getLogger(__name__)
 
 
 class ExtractedAsset(NamedTuple):
@@ -200,8 +203,41 @@ def get_page_html_for_tailwind(page: object) -> str:
     if not isinstance(page, Page):
         return ""
 
-    request = RequestFactory().get("/")
-    request.user = AnonymousUser()
-    template = page.get_template(request)
-    context = page.get_context(request)
-    return render_to_string(template, context, request=request)
+    try:
+        request = RequestFactory().get("/")
+        request.user = AnonymousUser()
+
+        # Set hostname from page's site to avoid DisallowedHost when
+        # templates call request.build_absolute_uri() or request.get_host()
+        hostname = _get_page_hostname(page)
+        request.META["HTTP_HOST"] = hostname
+        request.META["SERVER_NAME"] = hostname
+
+        template = page.get_template(request)
+        context = page.get_context(request)
+        return render_to_string(template, context, request=request)
+    except Exception:
+        logger.warning(
+            "Failed to render page %s (pk=%s) for Tailwind scanning",
+            type(page).__name__,
+            getattr(page, "pk", "?"),
+            exc_info=True,
+        )
+        return ""
+
+
+_DEFAULT_HOSTNAME = "localhost"
+
+
+def _get_page_hostname(page: object) -> str:
+    """Resolve the hostname for a page's site.
+
+    Returns a fallback when the site cannot be determined.
+    """
+    try:
+        site = page.get_site()  # type: ignore[attr-defined]
+        if site is not None:
+            return site.hostname
+    except Exception:
+        pass
+    return _DEFAULT_HOSTNAME
