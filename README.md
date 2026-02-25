@@ -395,6 +395,8 @@ This generates the following input CSS for the Tailwind CLI:
 
 When `TAILWIND_BASE_CSS` is set, `TAILWIND_PLUGINS` is ignored entirely because the user controls the full input CSS. For advanced customization beyond plugin activation, see the `TAILWIND_BASE_CSS` setting.
 
+> **Note:** Plugin styles are not available in Wagtail's preview mode. The Tailwind CSS browser CDN (`@tailwindcss/browser@4`) used for previews does not include plugin implementations. Published pages will render plugin styles correctly since they are compiled by the standalone CLI.
+
 ### Cross-Package Integration
 
 wagtail-asset-publisher integrates with Wagtail's `published` signal and `ReferenceIndex` to support cross-package workflows.
