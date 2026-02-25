@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -14,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 TAILWIND_CLI_TIMEOUT_SECONDS = 30
 DEFAULT_TAILWIND_INPUT = '@import "tailwindcss";\n'
+SAFE_PLUGIN_NAME_RE = re.compile(r"^@?[\w./-]+$")
 
 
 class TailwindCSSBuilder(BaseAssetBuilder):
@@ -72,6 +74,33 @@ class TailwindCSSBuilder(BaseAssetBuilder):
 
         return "tailwindcss"
 
+    def _validate_plugins(self, raw_value: object) -> list[str]:
+        """Validate TAILWIND_PLUGINS and return only safe plugin names.
+
+        Returns an empty list when the value is not a list or is None.
+        Individual entries that fail the safe-name check are skipped.
+        """
+        if raw_value is None:
+            return []
+
+        if not isinstance(raw_value, list):
+            logger.warning(
+                "TAILWIND_PLUGINS must be a list, got %s. " "Plugin injection skipped.",
+                type(raw_value).__name__,
+            )
+            return []
+
+        valid: list[str] = []
+        for entry in raw_value:
+            if not isinstance(entry, str) or not SAFE_PLUGIN_NAME_RE.match(entry):
+                logger.warning(
+                    "Invalid plugin name skipped: %r",
+                    entry,
+                )
+                continue
+            valid.append(entry)
+        return valid
+
     def _build_input_css(
         self, custom_css: str, content_file: Path | None = None
     ) -> str:
@@ -91,10 +120,9 @@ class TailwindCSSBuilder(BaseAssetBuilder):
         else:
             input_css = DEFAULT_TAILWIND_INPUT
 
-            plugins: list[str] | None = get_setting("TAILWIND_PLUGINS")
-            if plugins:
-                for plugin in plugins:
-                    input_css += f'@plugin "{plugin}";\n'
+            plugins = self._validate_plugins(get_setting("TAILWIND_PLUGINS"))
+            for plugin in plugins:
+                input_css += f'@plugin "{plugin}";\n'
 
         if content_file is not None:
             input_css += f'@source "{content_file}";\n'

@@ -35,6 +35,7 @@ import pytest
 from wagtail_asset_publisher.builders.raw import RawAssetBuilder
 from wagtail_asset_publisher.builders.tailwind import (
     DEFAULT_TAILWIND_INPUT,
+    SAFE_PLUGIN_NAME_RE,
     TailwindCSSBuilder,
 )
 
@@ -752,6 +753,360 @@ class TestTailwindBuildInputCss:
         assert len(plugin_lines) == len(plugins)
         for line in plugin_lines:
             assert line.endswith(";")
+
+
+class TestValidatePlugins:
+    """Tests for TailwindCSSBuilder._validate_plugins().
+
+    Validates that TAILWIND_PLUGINS setting values are safe before
+    injecting them into generated CSS.
+    """
+
+    def test_none_returns_empty_list(self):
+        """None value returns empty list without warning.
+
+        Purpose: Verify that _validate_plugins(None) returns an empty list
+                 (the common case when the setting is not configured).
+        Category: Normal case
+        Target: TailwindCSSBuilder._validate_plugins(raw_value)
+        Technique: Boundary value analysis (None input)
+        Test data: None
+        """
+        builder = TailwindCSSBuilder()
+
+        result = builder._validate_plugins(None)
+
+        assert result == []
+
+    def test_valid_list_passes_through(self):
+        """A list of valid plugin names is returned as-is.
+
+        Purpose: Verify that _validate_plugins() passes through a valid list
+                 of plugin names without modification.
+        Category: Normal case
+        Target: TailwindCSSBuilder._validate_plugins(raw_value)
+        Technique: Equivalence partitioning
+        Test data: List with two valid scoped package names
+        """
+        builder = TailwindCSSBuilder()
+        plugins = ["@tailwindcss/typography", "@tailwindcss/forms"]
+
+        result = builder._validate_plugins(plugins)
+
+        assert result == plugins
+
+    def test_string_value_returns_empty_and_warns(self, caplog):
+        """A string value (common misconfiguration) is rejected with warning.
+
+        Purpose: Verify that _validate_plugins() returns an empty list and
+                 logs a warning when the value is a string instead of a list.
+                 This prevents iterating over characters of the string.
+        Category: Error case
+        Target: TailwindCSSBuilder._validate_plugins(raw_value)
+        Technique: Error guessing (common misconfiguration)
+        Test data: "tailwindcss/typography" (string instead of list)
+        """
+        builder = TailwindCSSBuilder()
+
+        with caplog.at_level("WARNING"):
+            result = builder._validate_plugins("tailwindcss/typography")
+
+        assert result == []
+        assert "TAILWIND_PLUGINS must be a list" in caplog.text
+        assert "str" in caplog.text
+
+    def test_tuple_value_returns_empty_and_warns(self, caplog):
+        """A tuple value is rejected with warning.
+
+        Purpose: Verify that _validate_plugins() rejects non-list iterables
+                 (tuple) to enforce strict type checking.
+        Category: Error case
+        Target: TailwindCSSBuilder._validate_plugins(raw_value)
+        Technique: Error guessing (wrong iterable type)
+        Test data: Tuple of plugin names
+        """
+        builder = TailwindCSSBuilder()
+
+        with caplog.at_level("WARNING"):
+            result = builder._validate_plugins(("@tailwindcss/typography",))
+
+        assert result == []
+        assert "TAILWIND_PLUGINS must be a list" in caplog.text
+        assert "tuple" in caplog.text
+
+    def test_integer_value_returns_empty_and_warns(self, caplog):
+        """An integer value is rejected with warning.
+
+        Purpose: Verify that _validate_plugins() rejects non-iterable types.
+        Category: Error case
+        Target: TailwindCSSBuilder._validate_plugins(raw_value)
+        Technique: Error guessing (wrong type)
+        Test data: Integer 42
+        """
+        builder = TailwindCSSBuilder()
+
+        with caplog.at_level("WARNING"):
+            result = builder._validate_plugins(42)
+
+        assert result == []
+        assert "TAILWIND_PLUGINS must be a list" in caplog.text
+
+    def test_plugin_name_with_double_quote_skipped(self, caplog):
+        """Plugin name containing a double-quote is skipped with warning.
+
+        Purpose: Verify that a plugin name with an embedded double-quote
+                 is rejected, preventing CSS injection via @plugin "bad"name";
+        Category: Security case
+        Target: TailwindCSSBuilder._validate_plugins(raw_value)
+        Technique: Error guessing (CSS injection via quote)
+        Test data: ['bad"name']
+        """
+        builder = TailwindCSSBuilder()
+
+        with caplog.at_level("WARNING"):
+            result = builder._validate_plugins(['bad"name'])
+
+        assert result == []
+        assert "Invalid plugin name skipped" in caplog.text
+
+    def test_plugin_name_with_semicolon_skipped(self, caplog):
+        """Plugin name containing a semicolon is skipped with warning.
+
+        Purpose: Verify that a plugin name with a semicolon is rejected,
+                 preventing premature CSS statement termination.
+        Category: Security case
+        Target: TailwindCSSBuilder._validate_plugins(raw_value)
+        Technique: Error guessing (CSS injection via semicolon)
+        Test data: ['bad;name']
+        """
+        builder = TailwindCSSBuilder()
+
+        with caplog.at_level("WARNING"):
+            result = builder._validate_plugins(["bad;name"])
+
+        assert result == []
+        assert "Invalid plugin name skipped" in caplog.text
+
+    def test_plugin_name_with_space_skipped(self, caplog):
+        """Plugin name containing a space is skipped with warning.
+
+        Purpose: Verify that a plugin name with spaces is rejected.
+        Category: Error case
+        Target: TailwindCSSBuilder._validate_plugins(raw_value)
+        Technique: Error guessing (whitespace in name)
+        Test data: ['bad name']
+        """
+        builder = TailwindCSSBuilder()
+
+        with caplog.at_level("WARNING"):
+            result = builder._validate_plugins(["bad name"])
+
+        assert result == []
+        assert "Invalid plugin name skipped" in caplog.text
+
+    def test_non_string_entry_skipped(self, caplog):
+        """Non-string entries in the list are skipped with warning.
+
+        Purpose: Verify that non-string items (e.g. integers) within
+                 the plugin list are skipped individually.
+        Category: Error case
+        Target: TailwindCSSBuilder._validate_plugins(raw_value)
+        Technique: Error guessing (mixed types in list)
+        Test data: [123, "@tailwindcss/typography"]
+        """
+        builder = TailwindCSSBuilder()
+
+        with caplog.at_level("WARNING"):
+            result = builder._validate_plugins([123, "@tailwindcss/typography"])
+
+        assert result == ["@tailwindcss/typography"]
+        assert "Invalid plugin name skipped" in caplog.text
+
+    def test_mixed_valid_and_invalid_entries(self, caplog):
+        """Valid entries pass through while invalid ones are skipped.
+
+        Purpose: Verify that _validate_plugins() filters out only the
+                 invalid entries while keeping valid ones in order.
+        Category: Normal case
+        Target: TailwindCSSBuilder._validate_plugins(raw_value)
+        Technique: Equivalence partitioning (mixed input)
+        Test data: Mix of valid and invalid plugin names
+        """
+        builder = TailwindCSSBuilder()
+        plugins = [
+            "@tailwindcss/typography",
+            'bad"quote',
+            "@tailwindcss/forms",
+        ]
+
+        with caplog.at_level("WARNING"):
+            result = builder._validate_plugins(plugins)
+
+        assert result == ["@tailwindcss/typography", "@tailwindcss/forms"]
+        assert "Invalid plugin name skipped" in caplog.text
+
+    def test_empty_string_entry_skipped(self, caplog):
+        """Empty string plugin name is skipped with warning.
+
+        Purpose: Verify that an empty string entry is rejected because
+                 it does not match the safe plugin name pattern.
+        Category: Edge case
+        Target: TailwindCSSBuilder._validate_plugins(raw_value)
+        Technique: Boundary value analysis (empty string)
+        Test data: [""]
+        """
+        builder = TailwindCSSBuilder()
+
+        with caplog.at_level("WARNING"):
+            result = builder._validate_plugins([""])
+
+        assert result == []
+        assert "Invalid plugin name skipped" in caplog.text
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "@tailwindcss/typography",
+            "@tailwindcss/forms",
+            "tailwindcss-animate",
+            "daisyui",
+            "@myorg/my-plugin",
+            "plugin_with_underscore",
+            "plugin.with.dots",
+        ],
+    )
+    def test_safe_plugin_name_pattern_accepts_valid_names(self, name):
+        """SAFE_PLUGIN_NAME_RE accepts typical Tailwind plugin names.
+
+        Purpose: Verify that the regex pattern matches common valid
+                 plugin name formats (scoped packages, hyphens, dots, etc.).
+        Category: Normal case
+        Target: SAFE_PLUGIN_NAME_RE
+        Technique: Equivalence partitioning (valid inputs)
+        Test data: Various valid plugin name formats
+        """
+        assert SAFE_PLUGIN_NAME_RE.match(name)
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            'bad"quote',
+            "bad;semicolon",
+            "bad name",
+            "bad\nline",
+            "",
+            "bad{brace",
+            "bad}brace",
+        ],
+    )
+    def test_safe_plugin_name_pattern_rejects_invalid_names(self, name):
+        """SAFE_PLUGIN_NAME_RE rejects names with unsafe characters.
+
+        Purpose: Verify that the regex pattern rejects plugin names
+                 containing characters that could cause CSS parse errors.
+        Category: Security case
+        Target: SAFE_PLUGIN_NAME_RE
+        Technique: Error guessing (unsafe characters)
+        Test data: Various invalid plugin name formats
+        """
+        assert not SAFE_PLUGIN_NAME_RE.match(name)
+
+
+class TestBuildInputCssPluginValidation:
+    """Integration tests: _build_input_css with invalid TAILWIND_PLUGINS values."""
+
+    def test_string_plugins_produces_no_directives(self, caplog):
+        """String TAILWIND_PLUGINS produces no @plugin directives.
+
+        Purpose: Verify that _build_input_css() does not produce broken
+                 per-character @plugin directives when TAILWIND_PLUGINS is
+                 a string instead of a list.
+        Category: Error case (integration)
+        Target: TailwindCSSBuilder._build_input_css(custom_css, content_file)
+        Technique: Error guessing (common misconfiguration)
+        Test data: TAILWIND_PLUGINS="tailwindcss/typography" (string)
+        """
+        builder = TailwindCSSBuilder()
+
+        def mock_get_setting(key):
+            settings = {
+                "TAILWIND_BASE_CSS": None,
+                "TAILWIND_PLUGINS": "tailwindcss/typography",
+            }
+            return settings.get(key)
+
+        with (
+            caplog.at_level("WARNING"),
+            mock.patch(
+                "wagtail_asset_publisher.builders.tailwind.get_setting",
+                side_effect=mock_get_setting,
+            ),
+        ):
+            result = builder._build_input_css("", content_file=None)
+
+        assert "@plugin" not in result
+        assert result == DEFAULT_TAILWIND_INPUT
+        assert "TAILWIND_PLUGINS must be a list" in caplog.text
+
+    def test_plugin_with_quote_skipped_in_output(self, caplog):
+        """Plugin name with double-quote is excluded from generated CSS.
+
+        Purpose: Verify that _build_input_css() does not produce a broken
+                 @plugin directive when a plugin name contains a double-quote.
+        Category: Security case (integration)
+        Target: TailwindCSSBuilder._build_input_css(custom_css, content_file)
+        Technique: Error guessing (CSS injection)
+        Test data: TAILWIND_PLUGINS=['bad"name', '@tailwindcss/forms']
+        """
+        builder = TailwindCSSBuilder()
+
+        def mock_get_setting(key):
+            settings = {
+                "TAILWIND_BASE_CSS": None,
+                "TAILWIND_PLUGINS": ['bad"name', "@tailwindcss/forms"],
+            }
+            return settings.get(key)
+
+        with (
+            caplog.at_level("WARNING"),
+            mock.patch(
+                "wagtail_asset_publisher.builders.tailwind.get_setting",
+                side_effect=mock_get_setting,
+            ),
+        ):
+            result = builder._build_input_css("", content_file=None)
+
+        assert '@plugin "@tailwindcss/forms";' in result
+        assert "bad" not in result
+        assert "Invalid plugin name skipped" in caplog.text
+
+    def test_none_plugins_produces_no_directives(self):
+        """None TAILWIND_PLUGINS produces no @plugin directives.
+
+        Purpose: Verify that _build_input_css() gracefully handles
+                 TAILWIND_PLUGINS=None (the default when not configured).
+        Category: Normal case (integration)
+        Target: TailwindCSSBuilder._build_input_css(custom_css, content_file)
+        Technique: Boundary value analysis (None)
+        Test data: TAILWIND_PLUGINS=None
+        """
+        builder = TailwindCSSBuilder()
+
+        def mock_get_setting(key):
+            settings = {
+                "TAILWIND_BASE_CSS": None,
+                "TAILWIND_PLUGINS": None,
+            }
+            return settings.get(key)
+
+        with mock.patch(
+            "wagtail_asset_publisher.builders.tailwind.get_setting",
+            side_effect=mock_get_setting,
+        ):
+            result = builder._build_input_css("", content_file=None)
+
+        assert "@plugin" not in result
+        assert result == DEFAULT_TAILWIND_INPUT
 
 
 class TestTailwindBuildCommand:
