@@ -588,8 +588,7 @@ class TestMiddlewareWithTemplateAssets:
         request.wagtailpage = wagtail_page
 
         response_html = (
-            "<html><head><title>Test</title></head>"
-            "<body><p>content</p></body></html>"
+            "<html><head><title>Test</title></head><body><p>content</p></body></html>"
         )
         inner_response = HttpResponse(
             response_html, content_type="text/html; charset=utf-8"
@@ -633,8 +632,7 @@ class TestMiddlewareWithTemplateAssets:
         request.wagtailpage = wagtail_page
 
         response_html = (
-            "<html><head><title>Test</title></head>"
-            "<body><p>content</p></body></html>"
+            "<html><head><title>Test</title></head><body><p>content</p></body></html>"
         )
         inner_response = HttpResponse(
             response_html, content_type="text/html; charset=utf-8"
@@ -678,8 +676,7 @@ class TestMiddlewareWithTemplateAssets:
         request.wagtailpage = wagtail_page
 
         response_html = (
-            "<html><head><title>Test</title></head>"
-            "<body><p>content</p></body></html>"
+            "<html><head><title>Test</title></head><body><p>content</p></body></html>"
         )
         inner_response = HttpResponse(
             response_html, content_type="text/html; charset=utf-8"
