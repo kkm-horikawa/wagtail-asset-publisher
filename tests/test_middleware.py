@@ -765,16 +765,24 @@ class TestMiddlewareCallPassThrough:
         assert result is response
         mock_get_assets.assert_not_called()
 
+    @mock.patch("wagtail_asset_publisher.middleware._minify_html")
+    @mock.patch("wagtail_asset_publisher.middleware._process_html")
     @mock.patch("wagtail_asset_publisher.middleware._get_published_assets")
     @mock.patch("wagtail_asset_publisher.middleware._get_page")
     @mock.patch("wagtail_asset_publisher.middleware._is_preview_request")
-    def test_no_published_assets_passes_through(
-        self, mock_is_preview, mock_get_page, mock_get_assets
+    def test_no_published_assets_still_minifies(
+        self,
+        mock_is_preview,
+        mock_get_page,
+        mock_get_assets,
+        mock_process_html,
+        mock_minify_html,
     ):
-        """Page without published assets passes through unchanged.
+        """Page without published assets still gets HTML minification.
 
-        Purpose: Verify that pages that have never been through the asset
-            pipeline are not modified.
+        Purpose: Verify that pages without published assets skip
+            _process_html but still run _minify_html, so all Wagtail
+            page responses benefit from minification.
         Category: Normal case
         Target: AssetPublisherMiddleware.__call__(request)
         Technique: Equivalence partitioning (empty assets)
@@ -784,43 +792,57 @@ class TestMiddlewareCallPassThrough:
         page = mock.Mock()
         page.pk = 42
 
-        response = mock.Mock()
+        original_html = "<html><body>  <p>Hello</p>  </body></html>"
+        minified_html = "<html><body><p>Hello</p></body></html>"
+
+        response = mock.MagicMock()
         response.get.return_value = "text/html; charset=utf-8"
+        response.charset = "utf-8"
         response.streaming = False
+        response.content = original_html.encode("utf-8")
 
         mock_is_preview.return_value = False
         mock_get_page.return_value = page
         mock_get_assets.return_value = {}
+        mock_minify_html.return_value = minified_html
 
         get_response = mock.Mock(return_value=response)
         middleware = AssetPublisherMiddleware(get_response)
 
-        result = middleware(request)
+        middleware(request)
 
-        assert result is response
+        mock_process_html.assert_not_called()
+        mock_minify_html.assert_called_once_with(original_html)
 
+    @mock.patch("wagtail_asset_publisher.middleware._minify_html")
     @mock.patch("wagtail_asset_publisher.middleware._process_html")
     @mock.patch("wagtail_asset_publisher.middleware._get_published_assets")
     @mock.patch("wagtail_asset_publisher.middleware._get_page")
     @mock.patch("wagtail_asset_publisher.middleware._is_preview_request")
     def test_content_length_updated(
-        self, mock_is_preview, mock_get_page, mock_get_assets, mock_process_html
+        self,
+        mock_is_preview,
+        mock_get_page,
+        mock_get_assets,
+        mock_process_html,
+        mock_minify_html,
     ):
         """Content-Length header is updated after HTML modification.
 
         Purpose: Verify that the Content-Length header reflects the modified
-            content size after stripping and injection.
+            content size after stripping, injection, and minification.
         Category: Normal case
         Target: AssetPublisherMiddleware.__call__(request)
         Technique: Equivalence partitioning
-        Test data: Response that gets modified by _process_html
+        Test data: Response that gets modified by _process_html and _minify_html
         """
         request = mock.Mock()
         page = mock.Mock()
         page.pk = 42
 
         original_html = "<html><head></head><body></body></html>"
-        modified_html = '<html><head><link rel="stylesheet" href="x.css">\n</head><body></body></html>'
+        processed_html = '<html><head><link rel="stylesheet" href="x.css">\n</head><body></body></html>'
+        minified_html = '<html><head><link rel="stylesheet" href="x.css"></head><body></body></html>'
 
         response = mock.MagicMock()
         response.get.return_value = "text/html; charset=utf-8"
@@ -833,15 +855,17 @@ class TestMiddlewareCallPassThrough:
         mock_get_assets.return_value = {
             "css": {"url": "x.css", "content_hashes": set()}
         }
-        mock_process_html.return_value = modified_html
+        mock_process_html.return_value = processed_html
+        mock_minify_html.return_value = minified_html
 
         get_response = mock.Mock(return_value=response)
         middleware = AssetPublisherMiddleware(get_response)
 
         middleware(request)
 
+        mock_minify_html.assert_called_once_with(processed_html)
         response.__setitem__.assert_any_call(
-            "Content-Length", len(modified_html.encode("utf-8"))
+            "Content-Length", len(minified_html.encode("utf-8"))
         )
 
 
@@ -877,9 +901,12 @@ class TestMiddlewarePreview:
 
         mock_handle_preview.assert_called_once_with(response)
 
+    @mock.patch("wagtail_asset_publisher.middleware._minify_html")
     @mock.patch("wagtail_asset_publisher.preview.get_tailwind_cdn_script")
     @mock.patch("wagtail_asset_publisher.preview.is_tailwind_builder")
-    def test_preview_injects_tailwind_cdn(self, mock_is_tailwind, mock_cdn_script):
+    def test_preview_injects_tailwind_cdn(
+        self, mock_is_tailwind, mock_cdn_script, mock_minify
+    ):
         """Preview with Tailwind builder injects CDN script before </head>.
 
         Purpose: Verify that the Tailwind CDN script is injected into preview
@@ -893,6 +920,7 @@ class TestMiddlewarePreview:
 
         mock_is_tailwind.return_value = True
         mock_cdn_script.return_value = '<script src="https://cdn/tailwind.js"></script>'
+        mock_minify.side_effect = lambda html: html
 
         response = mock.MagicMock()
         response.charset = "utf-8"
@@ -904,13 +932,17 @@ class TestMiddlewarePreview:
         if isinstance(new_content, bytes):
             new_content = new_content.decode("utf-8")
         assert '<script src="https://cdn/tailwind.js"></script>' in new_content
+        mock_minify.assert_called_once()
 
+    @mock.patch("wagtail_asset_publisher.middleware._minify_html")
     @mock.patch("wagtail_asset_publisher.preview.is_tailwind_builder")
-    def test_preview_no_cdn_for_raw_builder(self, mock_is_tailwind):
-        """Preview with raw builder does not inject CDN script.
+    def test_preview_no_cdn_for_raw_builder_still_minifies(
+        self, mock_is_tailwind, mock_minify
+    ):
+        """Preview with raw builder still minifies but does not inject CDN script.
 
         Purpose: Verify that the CDN script is NOT injected when the CSS
-            builder is not Tailwind-based (e.g., RawAssetBuilder).
+            builder is not Tailwind-based, but minification still runs.
         Category: Normal case
         Target: _handle_preview(response)
         Technique: Equivalence partitioning (non-Tailwind builder)
@@ -919,20 +951,27 @@ class TestMiddlewarePreview:
         from wagtail_asset_publisher.middleware import _handle_preview
 
         mock_is_tailwind.return_value = False
+        original_html = "<html><head></head><body></body></html>"
+        mock_minify.side_effect = lambda html: html
 
-        response = mock.Mock()
-        response.content = b"<html><head></head><body></body></html>"
+        response = mock.MagicMock()
+        response.charset = "utf-8"
+        response.content = original_html.encode("utf-8")
 
-        result = _handle_preview(response)
+        _handle_preview(response)
 
-        assert result is response
+        mock_minify.assert_called_once_with(original_html)
 
+    @mock.patch("wagtail_asset_publisher.middleware._minify_html")
     @mock.patch("wagtail_asset_publisher.preview.get_tailwind_cdn_script")
     @mock.patch("wagtail_asset_publisher.preview.is_tailwind_builder")
-    def test_preview_no_head_tag_returns_unmodified(self, mock_is_tailwind, mock_cdn):
-        """Preview response without </head> is returned unmodified.
+    def test_preview_no_head_tag_skips_cdn_but_minifies(
+        self, mock_is_tailwind, mock_cdn, mock_minify
+    ):
+        """Preview response without </head> skips CDN injection but still minifies.
 
-        Purpose: Verify graceful handling of HTML without a head section.
+        Purpose: Verify graceful handling of HTML without a head section:
+            CDN script is not injected, but minification still runs.
         Category: Edge case
         Target: _handle_preview(response)
         Technique: Boundary value analysis (no </head> in HTML)
@@ -941,15 +980,17 @@ class TestMiddlewarePreview:
         from wagtail_asset_publisher.middleware import _handle_preview
 
         mock_is_tailwind.return_value = True
+        original_html = "<div>No head tag here</div>"
+        mock_minify.side_effect = lambda html: html
 
-        response = mock.Mock()
+        response = mock.MagicMock()
         response.charset = "utf-8"
-        response.content = b"<div>No head tag here</div>"
+        response.content = original_html.encode("utf-8")
 
-        result = _handle_preview(response)
+        _handle_preview(response)
 
-        assert result is response
         mock_cdn.assert_not_called()
+        mock_minify.assert_called_once_with(original_html)
 
 
 class TestInvalidateCache:

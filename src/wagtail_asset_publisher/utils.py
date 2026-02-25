@@ -15,9 +15,11 @@ from urllib.parse import urlparse
 
 from .conf import get_setting
 from .extractors import (
+    ExtractedAsset,
+    cached_render,
     compute_content_hash,
     extract_assets_from_page,
-    get_page_html_for_tailwind,
+    render_page_html,
 )
 from .middleware import invalidate_cache
 
@@ -25,24 +27,31 @@ logger = logging.getLogger(__name__)
 
 
 def build_page_assets(page: Any) -> None:
-    """Main entry point: extract, build, publish, and record assets for a page."""
+    """Main entry point: extract, build, publish, and record assets for a page.
+
+    Uses :func:`~extractors.cached_render` so that ``render_page_html``
+    is called at most once per page, even when both asset extraction
+    (``EXTRACT_FROM_TEMPLATES=True``) and the CSS builder
+    (``requires_html_content=True``) need the rendered HTML.
+    """
     storage = get_storage()
-    _process_css(page, storage)
-    _process_js(page, storage)
+    with cached_render(page):
+        styles, scripts = extract_assets_from_page(page)
+        _process_css(page, storage, styles)
+        _process_js(page, storage, scripts)
 
 
-def _process_css(page: Any, storage: Any) -> None:
+def _process_css(page: Any, storage: Any, styles: list[ExtractedAsset]) -> None:
     """Process CSS assets for a page."""
     from .models import PublishedAsset
 
     builder = get_builder(get_setting("CSS_BUILDER"))
 
-    styles, _ = extract_assets_from_page(page)
     extracted_css = [s.content for s in styles]
     content_hashes = [s.content_hash for s in styles]
 
     if builder.requires_html_content:
-        html_content = get_page_html_for_tailwind(page)
+        html_content = render_page_html(page)
         built_css = builder.build(html_content, extracted_css, "css")
     else:
         built_css = builder.build(None, extracted_css, "css")
@@ -73,12 +82,11 @@ def _process_css(page: Any, storage: Any) -> None:
     invalidate_cache(page.pk)
 
 
-def _process_js(page: Any, storage: Any) -> None:
+def _process_js(page: Any, storage: Any, scripts: list[ExtractedAsset]) -> None:
     """Process JS assets for a page, grouped by loading strategy."""
     from .models import PublishedAsset
 
     builder = get_builder(get_setting("JS_BUILDER"))
-    _, scripts = extract_assets_from_page(page)
 
     groups: dict[str, list[Any]] = {}
     for script in scripts:

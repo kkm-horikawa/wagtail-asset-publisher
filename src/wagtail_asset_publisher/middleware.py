@@ -1,4 +1,4 @@
-"""Middleware for stripping inline assets and injecting static file references."""
+"""Middleware for HTML minification and optional asset injection for Wagtail pages."""
 
 from __future__ import annotations
 
@@ -17,10 +17,12 @@ CACHE_TIMEOUT = 300  # 5 minutes
 
 
 class AssetPublisherMiddleware:
-    """Strip extracted inline <style>/<script> and inject static file refs.
+    """Apply HTML minification to all Wagtail page responses.
 
-    Only activates for Wagtail page responses that have published assets.
-    Non-page responses and pages without assets pass through untouched.
+    For pages with published assets, also strips matched inline tags and
+    injects static file references.
+
+    Non-page responses pass through untouched.
 
     In preview mode, injects Tailwind CDN script instead of published assets
     so editors can see Tailwind utility classes rendered in real time.
@@ -46,13 +48,13 @@ class AssetPublisherMiddleware:
         if page is None:
             return response
 
-        assets = _get_published_assets(page.pk)
-        if not assets:
-            return response
-
         charset = response.charset or "utf-8"
         content = response.content.decode(charset)
-        content = _process_html(content, assets)
+
+        assets = _get_published_assets(page.pk)
+        if assets:
+            content = _process_html(content, assets)
+
         content = _minify_html(content)
         response.content = content.encode(charset)
         response["Content-Length"] = len(response.content)
@@ -73,24 +75,22 @@ def _is_preview_request(request: HttpRequest) -> bool:
 
 
 def _handle_preview(response: HttpResponse) -> HttpResponse:
-    """Inject Tailwind CDN script into preview responses.
+    """Inject Tailwind CDN script into preview responses and minify HTML.
 
-    Only injects when the CSS builder is Tailwind-based; otherwise
-    returns the response unmodified.
+    When the CSS builder is Tailwind-based and the HTML contains a ``</head>``
+    tag, the Tailwind CDN script is injected.  Regardless of builder type,
+    the response is always minified before returning.
     """
     from .preview import get_tailwind_cdn_script, is_tailwind_builder
-
-    if not is_tailwind_builder():
-        return response
 
     charset = response.charset or "utf-8"
     content = response.content.decode(charset)
 
-    if "</head>" not in content:
-        return response
+    if is_tailwind_builder() and "</head>" in content:
+        cdn_script = get_tailwind_cdn_script()
+        content = content.replace("</head>", f"{cdn_script}\n</head>", 1)
 
-    cdn_script = get_tailwind_cdn_script()
-    content = content.replace("</head>", f"{cdn_script}\n</head>", 1)
+    content = _minify_html(content)
     response.content = content.encode(charset)
     response["Content-Length"] = len(response.content)
 
