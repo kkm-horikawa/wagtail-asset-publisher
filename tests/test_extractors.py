@@ -11,11 +11,15 @@ import pytest
 
 from wagtail_asset_publisher.extractors import (
     ExtractedAsset,
+    _extract_assets_from_streamfields,
     _get_page_hostname,
+    _rendered_html_cache,
+    cached_render,
     compute_content_hash,
     extract_assets,
     extract_assets_from_page,
     get_page_html_for_tailwind,
+    render_page_html,
 )
 
 
@@ -621,16 +625,16 @@ class TestExtractedAssetNamedTuple:
         assert asset1 == asset2
 
 
-class TestExtractAssetsFromPage:
-    """Tests for extract_assets_from_page with mocked Wagtail pages."""
+class TestExtractAssetsFromStreamfields:
+    """Tests for _extract_assets_from_streamfields with mocked Wagtail pages."""
 
-    def test_extract_assets_from_page_with_streamfield(self):
-        """Page with StreamField containing style/script tags yields extracted assets.
+    def test_extract_from_streamfield_with_style(self):
+        """Page with StreamField containing style tags yields extracted styles.
 
-        Purpose: Verify that extract_assets_from_page correctly iterates over
-            StreamField fields, renders them, and extracts inline assets.
+        Purpose: Verify that _extract_assets_from_streamfields correctly iterates
+            over StreamField fields, renders them, and extracts inline assets.
         Category: Normal case
-        Target: extract_assets_from_page(page)
+        Target: _extract_assets_from_streamfields(page)
         Technique: Equivalence partitioning (page with StreamField)
         Test data: Mock page with one StreamField containing HTML with style
         """
@@ -655,18 +659,18 @@ class TestExtractAssetsFromPage:
             pass
 
         with mock.patch("wagtail.fields.StreamField", FakeStreamField):
-            styles, scripts = extract_assets_from_page(mock_page)
+            styles, scripts = _extract_assets_from_streamfields(mock_page)
 
         assert len(styles) == 1
         assert styles[0].content == ".hero { color: red; }"
 
-    def test_extract_assets_from_page_no_streamfield(self):
+    def test_extract_from_no_streamfield(self):
         """Page without StreamField returns empty lists.
 
         Purpose: Verify that pages with no StreamField fields produce no
             extracted assets.
         Category: Edge case
-        Target: extract_assets_from_page(page)
+        Target: _extract_assets_from_streamfields(page)
         Technique: Equivalence partitioning (page without StreamField)
         Test data: Mock page with non-StreamField fields only
         """
@@ -684,18 +688,18 @@ class TestExtractAssetsFromPage:
             pass
 
         with mock.patch("wagtail.fields.StreamField", FakeStreamField):
-            styles, scripts = extract_assets_from_page(mock_page)
+            styles, scripts = _extract_assets_from_streamfields(mock_page)
 
         assert styles == []
         assert scripts == []
 
-    def test_extract_assets_from_page_empty_streamfield(self):
+    def test_extract_from_empty_streamfield(self):
         """Page with empty StreamField returns empty lists.
 
         Purpose: Verify that a StreamField that exists but is empty
             (falsy stream_value) does not produce assets.
         Category: Edge case
-        Target: extract_assets_from_page(page)
+        Target: _extract_assets_from_streamfields(page)
         Technique: Boundary value analysis (empty StreamField)
         Test data: Mock page with StreamField returning empty/falsy value
         """
@@ -717,10 +721,108 @@ class TestExtractAssetsFromPage:
             pass
 
         with mock.patch("wagtail.fields.StreamField", FakeStreamField):
-            styles, scripts = extract_assets_from_page(mock_page)
+            styles, scripts = _extract_assets_from_streamfields(mock_page)
 
         assert styles == []
         assert scripts == []
+
+
+class TestExtractAssetsFromPage:
+    """Tests for extract_assets_from_page with EXTRACT_FROM_TEMPLATES setting.
+
+    ## Decision Table: DT-EXTRACT-MODE
+
+    | ID  | EXTRACT_FROM_TEMPLATES | render_page_html result | Expected behavior            |
+    |-----|------------------------|-------------------------|------------------------------|
+    | DT1 | True                   | non-empty HTML          | Extract from full HTML       |
+    | DT2 | True                   | "" (empty)              | Fallback to StreamField-only |
+    | DT3 | False                  | N/A                     | StreamField-only extraction  |
+    """
+
+    @mock.patch("wagtail_asset_publisher.extractors.render_page_html")
+    @mock.patch("wagtail_asset_publisher.conf.get_setting")
+    def test_template_extraction_when_enabled_and_render_succeeds(
+        self, mock_get_setting, mock_render
+    ):
+        """Full HTML extraction is used when EXTRACT_FROM_TEMPLATES=True and render succeeds (DT1).
+
+        Purpose: Verify that extract_assets_from_page uses the full rendered HTML
+            to extract assets when EXTRACT_FROM_TEMPLATES is True and render_page_html
+            returns non-empty content.
+        Category: Normal case
+        Target: extract_assets_from_page(page)
+        Technique: Decision table (DT-EXTRACT-MODE DT1)
+        Test data: Mock page with rendered HTML containing style and script tags
+        """
+        mock_get_setting.return_value = True
+        mock_render.return_value = (
+            "<html><head><style>body{color:red}</style></head>"
+            "<body><script>alert(1);</script></body></html>"
+        )
+        mock_page = mock.Mock()
+
+        styles, scripts = extract_assets_from_page(mock_page)
+
+        mock_render.assert_called_once_with(mock_page)
+        assert len(styles) == 1
+        assert styles[0].content == "body{color:red}"
+        assert len(scripts) == 1
+        assert scripts[0].content == "alert(1);"
+
+    @mock.patch("wagtail_asset_publisher.extractors._extract_assets_from_streamfields")
+    @mock.patch("wagtail_asset_publisher.extractors.render_page_html")
+    @mock.patch("wagtail_asset_publisher.conf.get_setting")
+    def test_fallback_to_streamfield_when_render_returns_empty(
+        self, mock_get_setting, mock_render, mock_sf_extract
+    ):
+        """Falls back to StreamField extraction when render returns empty (DT2).
+
+        Purpose: Verify that extract_assets_from_page falls back to
+            _extract_assets_from_streamfields when EXTRACT_FROM_TEMPLATES is True
+            but render_page_html returns an empty string (e.g. render failure).
+        Category: Error case
+        Target: extract_assets_from_page(page)
+        Technique: Decision table (DT-EXTRACT-MODE DT2)
+        Test data: Mock page where render_page_html returns ""
+        """
+        mock_get_setting.return_value = True
+        mock_render.return_value = ""
+        expected_styles = [ExtractedAsset(content="sf{}", content_hash="sf123")]
+        mock_sf_extract.return_value = (expected_styles, [])
+        mock_page = mock.Mock()
+
+        styles, scripts = extract_assets_from_page(mock_page)
+
+        mock_render.assert_called_once_with(mock_page)
+        mock_sf_extract.assert_called_once_with(mock_page)
+        assert styles == expected_styles
+        assert scripts == []
+
+    @mock.patch("wagtail_asset_publisher.extractors._extract_assets_from_streamfields")
+    @mock.patch("wagtail_asset_publisher.conf.get_setting")
+    def test_streamfield_only_when_disabled(self, mock_get_setting, mock_sf_extract):
+        """StreamField-only extraction is used when EXTRACT_FROM_TEMPLATES=False (DT3).
+
+        Purpose: Verify that extract_assets_from_page uses only StreamField
+            extraction and does not attempt rendering when EXTRACT_FROM_TEMPLATES
+            is False.
+        Category: Normal case
+        Target: extract_assets_from_page(page)
+        Technique: Decision table (DT-EXTRACT-MODE DT3)
+        Test data: Mock page with EXTRACT_FROM_TEMPLATES=False
+        """
+        mock_get_setting.return_value = False
+        expected_scripts = [
+            ExtractedAsset(content="console.log(1);", content_hash="js123")
+        ]
+        mock_sf_extract.return_value = ([], expected_scripts)
+        mock_page = mock.Mock()
+
+        styles, scripts = extract_assets_from_page(mock_page)
+
+        mock_sf_extract.assert_called_once_with(mock_page)
+        assert styles == []
+        assert scripts == expected_scripts
 
 
 class TestGetPageHostname:
@@ -780,8 +882,8 @@ class TestGetPageHostname:
         assert result == "localhost"
 
 
-class TestGetPageHtmlForTailwind:
-    """Tests for get_page_html_for_tailwind with hostname and error handling."""
+class TestRenderPageHtml:
+    """Tests for render_page_html with hostname and error handling."""
 
     def _make_fake_page_class(self):
         """Create a fake Page class that mock pages can pass isinstance() check."""
@@ -802,7 +904,7 @@ class TestGetPageHtmlForTailwind:
             to the page's site hostname, preventing DisallowedHost errors when
             templates call request.build_absolute_uri() or request.get_host().
         Category: Normal case
-        Target: get_page_html_for_tailwind(page)
+        Target: render_page_html(page)
         Technique: Equivalence partitioning (page with valid site)
         Test data: Mock page with site hostname "prod.example.com"
         """
@@ -813,6 +915,7 @@ class TestGetPageHtmlForTailwind:
 
         mock_page = mock.Mock()
         mock_page._is_page = True
+        mock_page.pk = 1
         mock_page.get_site.return_value = mock_site
         mock_page.get_template.return_value = "test.html"
         mock_page.get_context.return_value = {}
@@ -840,7 +943,7 @@ class TestGetPageHtmlForTailwind:
             }
             mock_rf.return_value.get.return_value = mock_request
 
-            result = get_page_html_for_tailwind(mock_page)
+            result = render_page_html(mock_page)
 
         assert result == "<html>rendered</html>"
         assert captured_request["HTTP_HOST"] == "prod.example.com"
@@ -852,7 +955,7 @@ class TestGetPageHtmlForTailwind:
         Purpose: Verify that when page.get_site() raises an exception,
             the request is still created with a valid fallback hostname.
         Category: Edge case
-        Target: get_page_html_for_tailwind(page)
+        Target: render_page_html(page)
         Technique: Error guessing (site lookup failure during rendering)
         Test data: Mock page whose get_site() raises Exception
         """
@@ -860,6 +963,7 @@ class TestGetPageHtmlForTailwind:
 
         mock_page = mock.Mock()
         mock_page._is_page = True
+        mock_page.pk = 2
         mock_page.get_site.side_effect = Exception("Site.DoesNotExist")
         mock_page.get_template.return_value = "test.html"
         mock_page.get_context.return_value = {}
@@ -886,7 +990,7 @@ class TestGetPageHtmlForTailwind:
             }
             mock_rf.return_value.get.return_value = mock_request
 
-            result = get_page_html_for_tailwind(mock_page)
+            result = render_page_html(mock_page)
 
         assert result == "<html>fallback</html>"
         assert captured_request["HTTP_HOST"] == "localhost"
@@ -899,7 +1003,7 @@ class TestGetPageHtmlForTailwind:
             variable). The function should log a warning and return an empty
             string instead of propagating the exception.
         Category: Error case
-        Target: get_page_html_for_tailwind(page)
+        Target: render_page_html(page)
         Technique: Error guessing (render failure)
         Test data: Mock page whose get_template() raises RuntimeError
         """
@@ -924,7 +1028,7 @@ class TestGetPageHtmlForTailwind:
             }
             mock_rf.return_value.get.return_value = mock_request
 
-            result = get_page_html_for_tailwind(mock_page)
+            result = render_page_html(mock_page)
 
         assert result == ""
         mock_logger.warning.assert_called_once()
@@ -936,7 +1040,7 @@ class TestGetPageHtmlForTailwind:
         Purpose: Verify that non-Page objects are rejected early without
             attempting rendering.
         Category: Edge case
-        Target: get_page_html_for_tailwind(page)
+        Target: render_page_html(page)
         Technique: Equivalence partitioning (non-Page input)
         Test data: Plain Python object (not a Page)
         """
@@ -946,7 +1050,7 @@ class TestGetPageHtmlForTailwind:
         non_page._is_page = False
 
         with mock.patch("wagtail.models.Page", FakePage):
-            result = get_page_html_for_tailwind(non_page)
+            result = render_page_html(non_page)
 
         assert result == ""
 
@@ -955,9 +1059,9 @@ class TestGetPageHtmlForTailwind:
 
         Purpose: Verify that the warning log message contains enough context
             (class name, pk) for operators to identify which page failed
-            rendering during Tailwind CSS scanning.
+            rendering during asset extraction.
         Category: Error case
-        Target: get_page_html_for_tailwind(page) logging behavior
+        Target: render_page_html(page) logging behavior
         Technique: Error guessing (logging content verification)
         Test data: Mock page pk=99 raising during render_to_string
         """
@@ -989,9 +1093,157 @@ class TestGetPageHtmlForTailwind:
             }
             mock_rf.return_value.get.return_value = mock_request
 
-            result = get_page_html_for_tailwind(mock_page)
+            result = render_page_html(mock_page)
 
         assert result == ""
         warning_args = mock_logger.warning.call_args[0]
         assert "Failed to render page" in warning_args[0]
         assert warning_args[2] == 99
+
+    def test_returns_cached_result_within_cached_render_context(self):
+        """Second call to render_page_html returns cached result within cached_render context.
+
+        Purpose: Verify that render_page_html uses the ContextVar cache when
+            called inside a cached_render context manager, avoiding a second
+            render call.
+        Category: Normal case
+        Target: render_page_html(page) with cached_render context
+        Technique: State transition (uncached -> cached)
+        Test data: Mock page called twice within cached_render context
+        """
+        mock_page = mock.Mock(pk=10)
+
+        with (
+            mock.patch(
+                "wagtail_asset_publisher.extractors._render_page_html_uncached",
+                return_value="<html>cached</html>",
+            ) as mock_uncached,
+            cached_render(mock_page),
+        ):
+            result1 = render_page_html(mock_page)
+            result2 = render_page_html(mock_page)
+
+        assert result1 == "<html>cached</html>"
+        assert result2 == "<html>cached</html>"
+        mock_uncached.assert_called_once()
+
+    def test_no_cache_outside_cached_render_context(self):
+        """render_page_html calls _render_page_html_uncached each time outside cached_render.
+
+        Purpose: Verify that render_page_html does not use caching when called
+            outside of a cached_render context manager.
+        Category: Normal case
+        Target: render_page_html(page) without cached_render context
+        Technique: Equivalence partitioning (no cache context)
+        Test data: Mock page called twice without cached_render
+        """
+        mock_page = mock.Mock(pk=20)
+
+        with mock.patch(
+            "wagtail_asset_publisher.extractors._render_page_html_uncached",
+            return_value="<html>uncached</html>",
+        ) as mock_uncached:
+            result1 = render_page_html(mock_page)
+            result2 = render_page_html(mock_page)
+
+        assert result1 == "<html>uncached</html>"
+        assert result2 == "<html>uncached</html>"
+        assert mock_uncached.call_count == 2
+
+
+class TestGetPageHtmlForTailwindAlias:
+    """Tests for the backward-compatible get_page_html_for_tailwind alias."""
+
+    def test_alias_is_same_function(self):
+        """get_page_html_for_tailwind is an alias for render_page_html.
+
+        Purpose: Verify that the backward-compatible alias points to the
+            same function object as render_page_html.
+        Category: Normal case
+        Target: get_page_html_for_tailwind
+        Technique: Equivalence partitioning
+        Test data: Function identity check
+        """
+        assert get_page_html_for_tailwind is render_page_html
+
+
+class TestCachedRender:
+    """Tests for the cached_render context manager."""
+
+    def test_cache_is_populated_within_context(self):
+        """Cache dict is available within cached_render context.
+
+        Purpose: Verify that cached_render sets up a ContextVar cache dict
+            for the page's pk within its context.
+        Category: Normal case
+        Target: cached_render(page)
+        Technique: Statement coverage (C0)
+        Test data: Mock page with pk=5
+        """
+        mock_page = mock.Mock(pk=5)
+
+        with cached_render(mock_page):
+            cache = _rendered_html_cache.get(None)
+            assert cache is not None
+            assert isinstance(cache, dict)
+
+    def test_cache_is_cleaned_up_after_context(self):
+        """Cache entry is removed after cached_render context exits.
+
+        Purpose: Verify that cached_render cleans up the cache entry for the
+            page's pk after the context manager exits to prevent memory leaks.
+        Category: Normal case
+        Target: cached_render(page)
+        Technique: State transition (within context -> after context)
+        Test data: Mock page with pk=7, cache populated within context
+        """
+        mock_page = mock.Mock(pk=7)
+
+        with cached_render(mock_page):
+            cache = _rendered_html_cache.get(None)
+            cache[7] = "<html>test</html>"
+
+        outer_cache = _rendered_html_cache.get(None)
+        assert outer_cache is None
+
+    def test_yields_without_error_when_page_has_no_pk(self):
+        """cached_render yields without setting up cache when page has no pk.
+
+        Purpose: Verify that cached_render gracefully handles pages without a pk
+            (e.g. unsaved pages) by simply yielding without caching.
+        Category: Edge case
+        Target: cached_render(page)
+        Technique: Boundary value analysis (pk=None)
+        Test data: Mock page with pk=None
+        """
+        mock_page = mock.Mock(pk=None)
+
+        with cached_render(mock_page):
+            pass
+
+    def test_nested_contexts_do_not_interfere(self):
+        """Nested cached_render contexts for different pages do not interfere.
+
+        Purpose: Verify that nested cached_render calls for different pages
+            each maintain independent cache entries.
+        Category: Normal case
+        Target: cached_render(page)
+        Technique: State transition (nested contexts)
+        Test data: Two mock pages with different pks
+        """
+        page_a = mock.Mock(pk=10)
+        page_b = mock.Mock(pk=20)
+
+        with cached_render(page_a):
+            cache = _rendered_html_cache.get(None)
+            cache[10] = "<html>page_a</html>"
+
+            with cached_render(page_b):
+                inner_cache = _rendered_html_cache.get(None)
+                inner_cache[20] = "<html>page_b</html>"
+                assert inner_cache.get(10) == "<html>page_a</html>"
+                assert inner_cache.get(20) == "<html>page_b</html>"
+
+            after_inner = _rendered_html_cache.get(None)
+            assert after_inner.get(10) == "<html>page_a</html>"
+            assert 20 not in after_inner

@@ -28,25 +28,62 @@ from wagtail_asset_publisher.utils import (
 class TestBuildPageAssets:
     @mock.patch("wagtail_asset_publisher.utils._process_js")
     @mock.patch("wagtail_asset_publisher.utils._process_css")
+    @mock.patch("wagtail_asset_publisher.utils.extract_assets_from_page")
     @mock.patch("wagtail_asset_publisher.utils.get_storage")
-    def test_calls_css_and_js_processing(self, mock_get_storage, mock_css, mock_js):
-        """build_page_assets calls both _process_css and _process_js.
+    def test_calls_extract_once_and_passes_to_both_processors(
+        self, mock_get_storage, mock_extract, mock_css, mock_js
+    ):
+        """build_page_assets calls extract_assets_from_page once and passes results to both processors.
 
-        Purpose: Verify that build_page_assets orchestrates both CSS and JS
-                 processing with the same storage instance.
+        Purpose: Verify that build_page_assets extracts assets once and passes
+            the styles to _process_css and scripts to _process_js, avoiding
+            duplicate extraction.
+        Category: Normal case
+        Target: build_page_assets(page)
+        Technique: Statement coverage (C0)
+        Test data: Mock page with extracted styles and scripts
+        """
+        page = mock.Mock(pk=42)
+        mock_storage = mock.Mock()
+        mock_get_storage.return_value = mock_storage
+
+        mock_styles = [mock.Mock()]
+        mock_scripts = [mock.Mock()]
+        mock_extract.return_value = (mock_styles, mock_scripts)
+
+        build_page_assets(page)
+
+        mock_extract.assert_called_once_with(page)
+        mock_css.assert_called_once_with(page, mock_storage, mock_styles)
+        mock_js.assert_called_once_with(page, mock_storage, mock_scripts)
+
+    @mock.patch("wagtail_asset_publisher.utils._process_js")
+    @mock.patch("wagtail_asset_publisher.utils._process_css")
+    @mock.patch("wagtail_asset_publisher.utils.extract_assets_from_page")
+    @mock.patch("wagtail_asset_publisher.utils.get_storage")
+    def test_uses_cached_render_context(
+        self, mock_get_storage, mock_extract, mock_css, mock_js
+    ):
+        """build_page_assets wraps processing in cached_render context.
+
+        Purpose: Verify that build_page_assets uses the cached_render context
+            manager so that render_page_html is called at most once per page
+            when both extraction and CSS builder need the rendered HTML.
         Category: Normal case
         Target: build_page_assets(page)
         Technique: Statement coverage (C0)
         Test data: Mock page
         """
         page = mock.Mock(pk=42)
-        mock_storage = mock.Mock()
-        mock_get_storage.return_value = mock_storage
+        mock_get_storage.return_value = mock.Mock()
+        mock_extract.return_value = ([], [])
 
-        build_page_assets(page)
+        with mock.patch("wagtail_asset_publisher.utils.cached_render") as mock_cached:
+            mock_cached.return_value.__enter__ = mock.Mock(return_value=None)
+            mock_cached.return_value.__exit__ = mock.Mock(return_value=False)
+            build_page_assets(page)
 
-        mock_css.assert_called_once_with(page, mock_storage)
-        mock_js.assert_called_once_with(page, mock_storage)
+        mock_cached.assert_called_once_with(page)
 
 
 class TestProcessCss:
@@ -54,26 +91,23 @@ class TestProcessCss:
     @mock.patch(
         "wagtail_asset_publisher.utils.compute_content_hash", return_value="abcd1234"
     )
-    @mock.patch("wagtail_asset_publisher.utils.get_page_html_for_tailwind")
-    @mock.patch("wagtail_asset_publisher.utils.extract_assets_from_page")
     @mock.patch("wagtail_asset_publisher.utils.get_setting")
     @mock.patch("wagtail_asset_publisher.utils.get_builder")
-    def test_extracts_builds_saves_and_records(
+    def test_builds_saves_and_records_with_pre_extracted_styles(
         self,
         mock_get_builder,
         mock_get_setting,
-        mock_extract,
-        mock_get_html,
         mock_hash,
         mock_invalidate,
     ):
-        """_process_css extracts styles, builds, saves to storage, creates PublishedAsset.
+        """_process_css builds, saves, and records with pre-extracted styles.
 
-        Purpose: Verify the full CSS pipeline: extract -> build -> save -> record.
+        Purpose: Verify the full CSS pipeline: build -> save -> record, using
+            pre-extracted styles passed as the third argument.
         Category: Normal case
-        Target: _process_css(page, storage)
+        Target: _process_css(page, storage, styles)
         Technique: Statement coverage (C0)
-        Test data: Page with one extracted style block
+        Test data: Pre-extracted style list with one style block
         """
         page = mock.Mock(pk=42)
         storage = mock.Mock()
@@ -82,7 +116,6 @@ class TestProcessCss:
         style = mock.Mock()
         style.content = "body { color: red; }"
         style.content_hash = "hash1"
-        mock_extract.return_value = ([style], [])
 
         mock_builder = mock.Mock()
         mock_builder.requires_html_content = False
@@ -100,7 +133,7 @@ class TestProcessCss:
             mock.patch("wagtail_asset_publisher.models.PublishedAsset") as mock_pa,
             mock.patch("wagtail_asset_publisher.utils._clear_asset"),
         ):
-            _process_css(page, storage)
+            _process_css(page, storage, [style])
 
             mock_pa.objects.update_or_create.assert_called_once()
 
@@ -114,14 +147,12 @@ class TestProcessCss:
 
     @mock.patch("wagtail_asset_publisher.utils.invalidate_cache")
     @mock.patch("wagtail_asset_publisher.utils._clear_asset")
-    @mock.patch("wagtail_asset_publisher.utils.extract_assets_from_page")
     @mock.patch("wagtail_asset_publisher.utils.get_setting")
     @mock.patch("wagtail_asset_publisher.utils.get_builder")
     def test_clears_when_no_css_content(
         self,
         mock_get_builder,
         mock_get_setting,
-        mock_extract,
         mock_clear,
         mock_invalidate,
     ):
@@ -130,14 +161,12 @@ class TestProcessCss:
         Purpose: Verify that _process_css clears the existing asset when
                  the builder returns empty content.
         Category: Edge case
-        Target: _process_css(page, storage)
+        Target: _process_css(page, storage, styles)
         Technique: Decision coverage (C1) - empty build result branch
-        Test data: Page with no extracted styles
+        Test data: Empty pre-extracted styles list
         """
         page = mock.Mock(pk=42)
         storage = mock.Mock()
-
-        mock_extract.return_value = ([], [])
 
         mock_builder = mock.Mock()
         mock_builder.requires_html_content = False
@@ -148,7 +177,7 @@ class TestProcessCss:
             "CSS_BUILDER": "wagtail_asset_publisher.builders.raw.RawAssetBuilder",
         }[key]
 
-        _process_css(page, storage)
+        _process_css(page, storage, [])
 
         mock_clear.assert_called_once_with(page, "css", storage)
         storage.save.assert_not_called()
@@ -158,15 +187,13 @@ class TestProcessCss:
     @mock.patch(
         "wagtail_asset_publisher.utils.compute_content_hash", return_value="tw123456"
     )
-    @mock.patch("wagtail_asset_publisher.utils.get_page_html_for_tailwind")
-    @mock.patch("wagtail_asset_publisher.utils.extract_assets_from_page")
+    @mock.patch("wagtail_asset_publisher.utils.render_page_html")
     @mock.patch("wagtail_asset_publisher.utils.get_setting")
     @mock.patch("wagtail_asset_publisher.utils.get_builder")
     def test_tailwind_builder_receives_html_content(
         self,
         mock_get_builder,
         mock_get_setting,
-        mock_extract,
         mock_get_html,
         mock_hash,
         mock_invalidate,
@@ -174,11 +201,11 @@ class TestProcessCss:
         """When builder.requires_html_content is True, HTML content is passed to build().
 
         Purpose: Verify that the Tailwind builder receives HTML content
-                 from get_page_html_for_tailwind() when requires_html_content is True.
+                 from render_page_html() when requires_html_content is True.
         Category: Normal case
-        Target: _process_css(page, storage)
+        Target: _process_css(page, storage, styles)
         Technique: Decision coverage (C1) - requires_html_content=True branch
-        Test data: Page with Tailwind-style content
+        Test data: Pre-extracted style with Tailwind builder
         """
         page = mock.Mock(pk=42)
         storage = mock.Mock()
@@ -187,7 +214,6 @@ class TestProcessCss:
         style = mock.Mock()
         style.content = ".custom { color: red; }"
         style.content_hash = "hash1"
-        mock_extract.return_value = ([style], [])
 
         mock_builder = mock.Mock()
         mock_builder.requires_html_content = True
@@ -207,7 +233,7 @@ class TestProcessCss:
             mock.patch("wagtail_asset_publisher.models.PublishedAsset"),
             mock.patch("wagtail_asset_publisher.utils._clear_asset"),
         ):
-            _process_css(page, storage)
+            _process_css(page, storage, [style])
 
         mock_get_html.assert_called_once_with(page)
         mock_builder.build.assert_called_once_with(
@@ -220,16 +246,12 @@ class TestProcessCss:
     @mock.patch(
         "wagtail_asset_publisher.utils.compute_content_hash", return_value="css12345"
     )
-    @mock.patch("wagtail_asset_publisher.utils.get_page_html_for_tailwind")
-    @mock.patch("wagtail_asset_publisher.utils.extract_assets_from_page")
     @mock.patch("wagtail_asset_publisher.utils.get_setting")
     @mock.patch("wagtail_asset_publisher.utils.get_builder")
     def test_update_or_create_passes_empty_loading_for_css(
         self,
         mock_get_builder,
         mock_get_setting,
-        mock_extract,
-        mock_get_html,
         mock_hash,
         mock_invalidate,
     ):
@@ -239,9 +261,9 @@ class TestProcessCss:
             creating CSS assets, maintaining consistency with the
             unique_together=("page", "asset_type", "loading") constraint.
         Category: Normal case
-        Target: _process_css(page, storage) -> PublishedAsset.objects.update_or_create
+        Target: _process_css(page, storage, styles) -> PublishedAsset.objects.update_or_create
         Technique: Equivalence partitioning (CSS-specific loading value propagation)
-        Test data: One style block
+        Test data: One pre-extracted style block
         """
         page = mock.Mock(pk=42)
         storage = mock.Mock()
@@ -250,7 +272,6 @@ class TestProcessCss:
         style = mock.Mock()
         style.content = "body { color: blue; }"
         style.content_hash = "hash_css"
-        mock_extract.return_value = ([style], [])
 
         mock_builder = mock.Mock()
         mock_builder.requires_html_content = False
@@ -268,7 +289,7 @@ class TestProcessCss:
             mock.patch("wagtail_asset_publisher.models.PublishedAsset") as mock_pa,
             mock.patch("wagtail_asset_publisher.utils._clear_asset"),
         ):
-            _process_css(page, storage)
+            _process_css(page, storage, [style])
 
             mock_pa.objects.update_or_create.assert_called_once_with(
                 page=page,
@@ -286,24 +307,23 @@ class TestProcessJs:
     @mock.patch(
         "wagtail_asset_publisher.utils.compute_content_hash", return_value="js123456"
     )
-    @mock.patch("wagtail_asset_publisher.utils.extract_assets_from_page")
     @mock.patch("wagtail_asset_publisher.utils.get_setting")
     @mock.patch("wagtail_asset_publisher.utils.get_builder")
-    def test_extracts_builds_saves_and_records_js(
+    def test_builds_saves_and_records_with_pre_extracted_scripts(
         self,
         mock_get_builder,
         mock_get_setting,
-        mock_extract,
         mock_hash,
         mock_invalidate,
     ):
-        """_process_js extracts scripts, builds, saves to storage, creates PublishedAsset.
+        """_process_js builds, saves, and records with pre-extracted scripts.
 
-        Purpose: Verify the full JS pipeline: extract -> build -> save -> record.
+        Purpose: Verify the full JS pipeline: build -> save -> record, using
+            pre-extracted scripts passed as the third argument.
         Category: Normal case
-        Target: _process_js(page, storage)
+        Target: _process_js(page, storage, scripts)
         Technique: Statement coverage (C0)
-        Test data: Page with one extracted script block (blocking loading)
+        Test data: Pre-extracted script list with one blocking script
         """
         page = mock.Mock(pk=42)
         storage = mock.Mock()
@@ -313,7 +333,6 @@ class TestProcessJs:
         script.content = "console.log('hello');"
         script.content_hash = "jshash1"
         script.loading = ""
-        mock_extract.return_value = ([], [script])
 
         mock_builder = mock.Mock()
         mock_builder.build.return_value = "console.log('hello');"
@@ -330,7 +349,7 @@ class TestProcessJs:
             mock.patch("wagtail_asset_publisher.models.PublishedAsset") as mock_pa,
             mock.patch("wagtail_asset_publisher.utils._clear_js_assets"),
         ):
-            _process_js(page, storage)
+            _process_js(page, storage, [script])
 
             mock_pa.objects.update_or_create.assert_called_once()
 
@@ -344,30 +363,26 @@ class TestProcessJs:
 
     @mock.patch("wagtail_asset_publisher.utils.invalidate_cache")
     @mock.patch("wagtail_asset_publisher.utils._clear_js_assets")
-    @mock.patch("wagtail_asset_publisher.utils.extract_assets_from_page")
     @mock.patch("wagtail_asset_publisher.utils.get_setting")
     @mock.patch("wagtail_asset_publisher.utils.get_builder")
     def test_clears_when_no_js_content(
         self,
         mock_get_builder,
         mock_get_setting,
-        mock_extract,
         mock_clear,
         mock_invalidate,
     ):
         """When no scripts are extracted, all existing JS assets are cleared.
 
         Purpose: Verify that _process_js clears all existing JS assets when
-                 no scripts are extracted from the page.
+                 no scripts are provided.
         Category: Edge case
-        Target: _process_js(page, storage)
+        Target: _process_js(page, storage, scripts)
         Technique: Decision coverage (C1) - empty extraction branch
-        Test data: Page with no extracted scripts
+        Test data: Empty pre-extracted scripts list
         """
         page = mock.Mock(pk=42)
         storage = mock.Mock()
-
-        mock_extract.return_value = ([], [])
 
         mock_builder = mock.Mock()
         mock_builder.build.return_value = ""
@@ -377,7 +392,7 @@ class TestProcessJs:
             "JS_BUILDER": "wagtail_asset_publisher.builders.raw.RawAssetBuilder",
         }[key]
 
-        _process_js(page, storage)
+        _process_js(page, storage, [])
 
         mock_clear.assert_called_once_with(page, storage)
         storage.save.assert_not_called()
@@ -391,14 +406,12 @@ class TestProcessJsLoadingGroups:
     @mock.patch(
         "wagtail_asset_publisher.utils.compute_content_hash", return_value="grp12345"
     )
-    @mock.patch("wagtail_asset_publisher.utils.extract_assets_from_page")
     @mock.patch("wagtail_asset_publisher.utils.get_setting")
     @mock.patch("wagtail_asset_publisher.utils.get_builder")
     def test_scripts_grouped_by_loading_strategy(
         self,
         mock_get_builder,
         mock_get_setting,
-        mock_extract,
         mock_hash,
         mock_invalidate,
     ):
@@ -407,9 +420,9 @@ class TestProcessJsLoadingGroups:
         Purpose: Verify that _process_js groups scripts by loading strategy
             and saves each group as a separate file via storage.save.
         Category: Normal case
-        Target: _process_js(page, storage)
+        Target: _process_js(page, storage, scripts)
         Technique: Decision table (grouping by loading value)
-        Test data: Three scripts: blocking, defer, module
+        Test data: Three pre-extracted scripts: blocking, defer, module
         """
         page = mock.Mock(pk=42)
         storage = mock.Mock()
@@ -430,11 +443,6 @@ class TestProcessJsLoadingGroups:
         module_script.content_hash = "hash_module"
         module_script.loading = "module"
 
-        mock_extract.return_value = (
-            [],
-            [blocking_script, defer_script, module_script],
-        )
-
         mock_builder = mock.Mock()
         mock_builder.build.return_value = "built_js_content"
         mock_get_builder.return_value = mock_builder
@@ -450,7 +458,7 @@ class TestProcessJsLoadingGroups:
             mock.patch("wagtail_asset_publisher.models.PublishedAsset") as mock_pa,
             mock.patch("wagtail_asset_publisher.utils._clear_js_assets"),
         ):
-            _process_js(page, storage)
+            _process_js(page, storage, [blocking_script, defer_script, module_script])
 
             assert mock_pa.objects.update_or_create.call_count == 3
 
@@ -461,14 +469,12 @@ class TestProcessJsLoadingGroups:
     @mock.patch(
         "wagtail_asset_publisher.utils.compute_content_hash", return_value="fn123456"
     )
-    @mock.patch("wagtail_asset_publisher.utils.extract_assets_from_page")
     @mock.patch("wagtail_asset_publisher.utils.get_setting")
     @mock.patch("wagtail_asset_publisher.utils.get_builder")
     def test_filename_includes_loading_suffix_for_non_blocking(
         self,
         mock_get_builder,
         mock_get_setting,
-        mock_extract,
         mock_hash,
         mock_invalidate,
     ):
@@ -478,9 +484,9 @@ class TestProcessJsLoadingGroups:
             a "-{loading}" suffix appended to the filename, enabling
             loading strategy identification by filename.
         Category: Normal case
-        Target: _process_js(page, storage) filename generation
+        Target: _process_js(page, storage, scripts) filename generation
         Technique: Boundary value analysis (empty vs non-empty loading value)
-        Test data: Script with loading="defer"
+        Test data: Pre-extracted script with loading="defer"
         """
         page = mock.Mock(pk=42)
         storage = mock.Mock()
@@ -490,7 +496,6 @@ class TestProcessJsLoadingGroups:
         script.content = "deferred();"
         script.content_hash = "hash1"
         script.loading = "defer"
-        mock_extract.return_value = ([], [script])
 
         mock_builder = mock.Mock()
         mock_builder.build.return_value = "deferred();"
@@ -507,7 +512,7 @@ class TestProcessJsLoadingGroups:
             mock.patch("wagtail_asset_publisher.models.PublishedAsset"),
             mock.patch("wagtail_asset_publisher.utils._clear_js_assets"),
         ):
-            _process_js(page, storage)
+            _process_js(page, storage, [script])
 
         storage.save.assert_called_once_with(
             "page-assets/js/42-fn123456-defer.js", "deferred();"
@@ -517,14 +522,12 @@ class TestProcessJsLoadingGroups:
     @mock.patch(
         "wagtail_asset_publisher.utils.compute_content_hash", return_value="fn123456"
     )
-    @mock.patch("wagtail_asset_publisher.utils.extract_assets_from_page")
     @mock.patch("wagtail_asset_publisher.utils.get_setting")
     @mock.patch("wagtail_asset_publisher.utils.get_builder")
     def test_filename_no_suffix_for_blocking(
         self,
         mock_get_builder,
         mock_get_setting,
-        mock_extract,
         mock_hash,
         mock_invalidate,
     ):
@@ -533,9 +536,9 @@ class TestProcessJsLoadingGroups:
         Purpose: Verify that scripts with loading="" (blocking) have no
             suffix appended to the filename, preserving backward compatibility.
         Category: Normal case
-        Target: _process_js(page, storage) filename generation
+        Target: _process_js(page, storage, scripts) filename generation
         Technique: Boundary value analysis (empty loading value)
-        Test data: Script with loading=""
+        Test data: Pre-extracted script with loading=""
         """
         page = mock.Mock(pk=42)
         storage = mock.Mock()
@@ -545,7 +548,6 @@ class TestProcessJsLoadingGroups:
         script.content = "blocking();"
         script.content_hash = "hash1"
         script.loading = ""
-        mock_extract.return_value = ([], [script])
 
         mock_builder = mock.Mock()
         mock_builder.build.return_value = "blocking();"
@@ -562,7 +564,7 @@ class TestProcessJsLoadingGroups:
             mock.patch("wagtail_asset_publisher.models.PublishedAsset"),
             mock.patch("wagtail_asset_publisher.utils._clear_js_assets"),
         ):
-            _process_js(page, storage)
+            _process_js(page, storage, [script])
 
         storage.save.assert_called_once_with(
             "page-assets/js/42-fn123456.js", "blocking();"
@@ -572,14 +574,12 @@ class TestProcessJsLoadingGroups:
     @mock.patch(
         "wagtail_asset_publisher.utils.compute_content_hash", return_value="mod12345"
     )
-    @mock.patch("wagtail_asset_publisher.utils.extract_assets_from_page")
     @mock.patch("wagtail_asset_publisher.utils.get_setting")
     @mock.patch("wagtail_asset_publisher.utils.get_builder")
     def test_update_or_create_receives_loading_value(
         self,
         mock_get_builder,
         mock_get_setting,
-        mock_extract,
         mock_hash,
         mock_invalidate,
     ):
@@ -588,9 +588,9 @@ class TestProcessJsLoadingGroups:
         Purpose: Verify that _process_js correctly passes the loading value
             when creating or updating PublishedAsset records in the database.
         Category: Normal case
-        Target: _process_js(page, storage) -> PublishedAsset.objects.update_or_create
+        Target: _process_js(page, storage, scripts) -> PublishedAsset.objects.update_or_create
         Technique: Equivalence partitioning (loading value propagation)
-        Test data: Script with loading="module"
+        Test data: Pre-extracted script with loading="module"
         """
         page = mock.Mock(pk=42)
         storage = mock.Mock()
@@ -600,7 +600,6 @@ class TestProcessJsLoadingGroups:
         script.content = "import x from 'y';"
         script.content_hash = "hash_module"
         script.loading = "module"
-        mock_extract.return_value = ([], [script])
 
         mock_builder = mock.Mock()
         mock_builder.build.return_value = "import x from 'y';"
@@ -617,7 +616,7 @@ class TestProcessJsLoadingGroups:
             mock.patch("wagtail_asset_publisher.models.PublishedAsset") as mock_pa,
             mock.patch("wagtail_asset_publisher.utils._clear_js_assets"),
         ):
-            _process_js(page, storage)
+            _process_js(page, storage, [script])
 
             mock_pa.objects.update_or_create.assert_called_once_with(
                 page=page,
@@ -633,14 +632,12 @@ class TestProcessJsLoadingGroups:
     @mock.patch(
         "wagtail_asset_publisher.utils.compute_content_hash", return_value="grp12345"
     )
-    @mock.patch("wagtail_asset_publisher.utils.extract_assets_from_page")
     @mock.patch("wagtail_asset_publisher.utils.get_setting")
     @mock.patch("wagtail_asset_publisher.utils.get_builder")
     def test_same_loading_scripts_grouped_together(
         self,
         mock_get_builder,
         mock_get_setting,
-        mock_extract,
         mock_hash,
         mock_invalidate,
     ):
@@ -649,9 +646,9 @@ class TestProcessJsLoadingGroups:
         Purpose: Verify that multiple scripts with the same loading value are
             combined into a single build call, producing one output file.
         Category: Normal case
-        Target: _process_js(page, storage) grouping
+        Target: _process_js(page, storage, scripts) grouping
         Technique: Equivalence partitioning (multiple scripts with same loading value)
-        Test data: Two scripts with loading="defer"
+        Test data: Two pre-extracted scripts with loading="defer"
         """
         page = mock.Mock(pk=42)
         storage = mock.Mock()
@@ -666,8 +663,6 @@ class TestProcessJsLoadingGroups:
         script2.content = "deferred2();"
         script2.content_hash = "hash2"
         script2.loading = "defer"
-
-        mock_extract.return_value = ([], [script1, script2])
 
         mock_builder = mock.Mock()
         mock_builder.build.return_value = "deferred1();deferred2();"
@@ -684,7 +679,7 @@ class TestProcessJsLoadingGroups:
             mock.patch("wagtail_asset_publisher.models.PublishedAsset") as mock_pa,
             mock.patch("wagtail_asset_publisher.utils._clear_js_assets"),
         ):
-            _process_js(page, storage)
+            _process_js(page, storage, [script1, script2])
 
             mock_pa.objects.update_or_create.assert_called_once()
 
@@ -697,14 +692,12 @@ class TestProcessJsLoadingGroups:
     @mock.patch(
         "wagtail_asset_publisher.utils.compute_content_hash", return_value="skip1234"
     )
-    @mock.patch("wagtail_asset_publisher.utils.extract_assets_from_page")
     @mock.patch("wagtail_asset_publisher.utils.get_setting")
     @mock.patch("wagtail_asset_publisher.utils.get_builder")
     def test_empty_build_result_skipped_for_group(
         self,
         mock_get_builder,
         mock_get_setting,
-        mock_extract,
         mock_hash,
         mock_invalidate,
     ):
@@ -714,9 +707,9 @@ class TestProcessJsLoadingGroups:
             loading group, storage.save is not called, preventing empty
             file creation.
         Category: Edge case
-        Target: _process_js(page, storage)
+        Target: _process_js(page, storage, scripts)
         Technique: Decision coverage (C1) - empty builder result branch
-        Test data: Script whose builder returns empty string
+        Test data: Pre-extracted script whose builder returns empty string
         """
         page = mock.Mock(pk=42)
         storage = mock.Mock()
@@ -725,7 +718,6 @@ class TestProcessJsLoadingGroups:
         script.content = "empty_result();"
         script.content_hash = "hash1"
         script.loading = "defer"
-        mock_extract.return_value = ([], [script])
 
         mock_builder = mock.Mock()
         mock_builder.build.return_value = ""
@@ -742,7 +734,7 @@ class TestProcessJsLoadingGroups:
             mock.patch("wagtail_asset_publisher.models.PublishedAsset") as mock_pa,
             mock.patch("wagtail_asset_publisher.utils._clear_js_assets"),
         ):
-            _process_js(page, storage)
+            _process_js(page, storage, [script])
 
             mock_pa.objects.update_or_create.assert_not_called()
 
@@ -1201,14 +1193,12 @@ class TestCacheInvalidation:
     @mock.patch(
         "wagtail_asset_publisher.utils.compute_content_hash", return_value="abc12345"
     )
-    @mock.patch("wagtail_asset_publisher.utils.extract_assets_from_page")
     @mock.patch("wagtail_asset_publisher.utils.get_setting")
     @mock.patch("wagtail_asset_publisher.utils.get_builder")
     def test_cache_invalidated_after_publish(
         self,
         mock_get_builder,
         mock_get_setting,
-        mock_extract,
         mock_hash,
         mock_invalidate,
     ):
@@ -1217,9 +1207,9 @@ class TestCacheInvalidation:
         Purpose: Verify that the middleware cache is invalidated after
                  publishing a new asset so the next request picks up the new URL.
         Category: Normal case
-        Target: _process_css(page, storage) -> invalidate_cache
+        Target: _process_css(page, storage, styles) -> invalidate_cache
         Technique: Equivalence partitioning
-        Test data: Page with CSS content
+        Test data: Pre-extracted style with CSS content
         """
         page = mock.Mock(pk=42)
         storage = mock.Mock()
@@ -1228,7 +1218,6 @@ class TestCacheInvalidation:
         style = mock.Mock()
         style.content = "body{}"
         style.content_hash = "h1"
-        mock_extract.return_value = ([style], [])
 
         mock_builder = mock.Mock()
         mock_builder.requires_html_content = False
@@ -1246,20 +1235,18 @@ class TestCacheInvalidation:
             mock.patch("wagtail_asset_publisher.models.PublishedAsset"),
             mock.patch("wagtail_asset_publisher.utils._clear_asset"),
         ):
-            _process_css(page, storage)
+            _process_css(page, storage, [style])
 
         mock_invalidate.assert_called_with(42)
 
     @mock.patch("wagtail_asset_publisher.utils.invalidate_cache")
     @mock.patch("wagtail_asset_publisher.utils._clear_asset")
-    @mock.patch("wagtail_asset_publisher.utils.extract_assets_from_page")
     @mock.patch("wagtail_asset_publisher.utils.get_setting")
     @mock.patch("wagtail_asset_publisher.utils.get_builder")
     def test_cache_invalidated_after_clear(
         self,
         mock_get_builder,
         mock_get_setting,
-        mock_extract,
         mock_clear,
         mock_invalidate,
     ):
@@ -1268,14 +1255,12 @@ class TestCacheInvalidation:
         Purpose: Verify that the middleware cache is invalidated after
                  clearing an asset (when builder returns empty).
         Category: Normal case
-        Target: _process_css(page, storage) -> invalidate_cache
+        Target: _process_css(page, storage, styles) -> invalidate_cache
         Technique: Equivalence partitioning
-        Test data: Page with no CSS content (builder returns empty)
+        Test data: Empty pre-extracted styles (builder returns empty)
         """
         page = mock.Mock(pk=42)
         storage = mock.Mock()
-
-        mock_extract.return_value = ([], [])
 
         mock_builder = mock.Mock()
         mock_builder.requires_html_content = False
@@ -1286,7 +1271,7 @@ class TestCacheInvalidation:
             "CSS_BUILDER": "wagtail_asset_publisher.builders.raw.RawAssetBuilder",
         }[key]
 
-        _process_css(page, storage)
+        _process_css(page, storage, [])
 
         mock_invalidate.assert_called_with(42)
 
@@ -1698,14 +1683,12 @@ class TestProcessCssMinification:
     @mock.patch(
         "wagtail_asset_publisher.utils._minify_css", return_value="body{color:red}"
     )
-    @mock.patch("wagtail_asset_publisher.utils.extract_assets_from_page")
     @mock.patch("wagtail_asset_publisher.utils.get_setting")
     @mock.patch("wagtail_asset_publisher.utils.get_builder")
     def test_minify_css_called_when_enabled(
         self,
         mock_get_builder,
         mock_get_setting,
-        mock_extract,
         mock_minify,
         mock_hash,
         mock_invalidate,
@@ -1715,9 +1698,9 @@ class TestProcessCssMinification:
         Purpose: Verify that _process_css calls _minify_css on the build result
                  when the MINIFY_CSS setting is True.
         Category: Normal case
-        Target: _process_css(page, storage)
+        Target: _process_css(page, storage, styles)
         Technique: Decision coverage (C1) - MINIFY_CSS=True branch
-        Test data: MINIFY_CSS=True setting
+        Test data: MINIFY_CSS=True setting with pre-extracted style
         """
         page = mock.Mock(pk=42)
         storage = mock.Mock()
@@ -1726,7 +1709,6 @@ class TestProcessCssMinification:
         style = mock.Mock()
         style.content = "body { color: red; }"
         style.content_hash = "hash1"
-        mock_extract.return_value = ([style], [])
 
         mock_builder = mock.Mock()
         mock_builder.requires_html_content = False
@@ -1744,7 +1726,7 @@ class TestProcessCssMinification:
             mock.patch("wagtail_asset_publisher.models.PublishedAsset"),
             mock.patch("wagtail_asset_publisher.utils._clear_asset"),
         ):
-            _process_css(page, storage)
+            _process_css(page, storage, [style])
 
         mock_minify.assert_called_once_with("body { color: red; }")
 
@@ -1753,14 +1735,12 @@ class TestProcessCssMinification:
         "wagtail_asset_publisher.utils.compute_content_hash", return_value="raw12345"
     )
     @mock.patch("wagtail_asset_publisher.utils._minify_css")
-    @mock.patch("wagtail_asset_publisher.utils.extract_assets_from_page")
     @mock.patch("wagtail_asset_publisher.utils.get_setting")
     @mock.patch("wagtail_asset_publisher.utils.get_builder")
     def test_minify_css_not_called_when_disabled(
         self,
         mock_get_builder,
         mock_get_setting,
-        mock_extract,
         mock_minify,
         mock_hash,
         mock_invalidate,
@@ -1770,9 +1750,9 @@ class TestProcessCssMinification:
         Purpose: Verify that _process_css does not call _minify_css and uses
                  the build result as-is when the MINIFY_CSS setting is False.
         Category: Normal case
-        Target: _process_css(page, storage)
+        Target: _process_css(page, storage, styles)
         Technique: Decision coverage (C1) - MINIFY_CSS=False branch
-        Test data: MINIFY_CSS=False setting
+        Test data: MINIFY_CSS=False setting with pre-extracted style
         """
         page = mock.Mock(pk=42)
         storage = mock.Mock()
@@ -1781,7 +1761,6 @@ class TestProcessCssMinification:
         style = mock.Mock()
         style.content = "body { color: red; }"
         style.content_hash = "hash1"
-        mock_extract.return_value = ([style], [])
 
         mock_builder = mock.Mock()
         mock_builder.requires_html_content = False
@@ -1799,7 +1778,7 @@ class TestProcessCssMinification:
             mock.patch("wagtail_asset_publisher.models.PublishedAsset"),
             mock.patch("wagtail_asset_publisher.utils._clear_asset"),
         ):
-            _process_css(page, storage)
+            _process_css(page, storage, [style])
 
         mock_minify.assert_not_called()
 
@@ -1812,14 +1791,12 @@ class TestProcessJsOptimization:
         "wagtail_asset_publisher.utils.compute_content_hash", return_value="opt12345"
     )
     @mock.patch("wagtail_asset_publisher.utils._optimize_js", return_value="var a=1;")
-    @mock.patch("wagtail_asset_publisher.utils.extract_assets_from_page")
     @mock.patch("wagtail_asset_publisher.utils.get_setting")
     @mock.patch("wagtail_asset_publisher.utils.get_builder")
     def test_optimize_js_called_when_enabled(
         self,
         mock_get_builder,
         mock_get_setting,
-        mock_extract,
         mock_optimize,
         mock_hash,
         mock_invalidate,
@@ -1829,9 +1806,9 @@ class TestProcessJsOptimization:
         Purpose: Verify that _process_js calls _optimize_js on the build result
                  when the OBFUSCATE_JS setting is True.
         Category: Normal case
-        Target: _process_js(page, storage)
+        Target: _process_js(page, storage, scripts)
         Technique: Decision coverage (C1) - OBFUSCATE_JS=True branch
-        Test data: OBFUSCATE_JS=True setting
+        Test data: OBFUSCATE_JS=True setting with pre-extracted script
         """
         page = mock.Mock(pk=42)
         storage = mock.Mock()
@@ -1841,7 +1818,6 @@ class TestProcessJsOptimization:
         script.content = "var  a  =  1;"
         script.content_hash = "jshash1"
         script.loading = ""
-        mock_extract.return_value = ([], [script])
 
         mock_builder = mock.Mock()
         mock_builder.build.return_value = "var  a  =  1;"
@@ -1858,7 +1834,7 @@ class TestProcessJsOptimization:
             mock.patch("wagtail_asset_publisher.models.PublishedAsset"),
             mock.patch("wagtail_asset_publisher.utils._clear_js_assets"),
         ):
-            _process_js(page, storage)
+            _process_js(page, storage, [script])
 
         mock_optimize.assert_called_once_with("var  a  =  1;")
 
@@ -1867,14 +1843,12 @@ class TestProcessJsOptimization:
         "wagtail_asset_publisher.utils.compute_content_hash", return_value="raw12345"
     )
     @mock.patch("wagtail_asset_publisher.utils._optimize_js")
-    @mock.patch("wagtail_asset_publisher.utils.extract_assets_from_page")
     @mock.patch("wagtail_asset_publisher.utils.get_setting")
     @mock.patch("wagtail_asset_publisher.utils.get_builder")
     def test_optimize_js_not_called_when_disabled(
         self,
         mock_get_builder,
         mock_get_setting,
-        mock_extract,
         mock_optimize,
         mock_hash,
         mock_invalidate,
@@ -1884,9 +1858,9 @@ class TestProcessJsOptimization:
         Purpose: Verify that _process_js does not call _optimize_js and uses
                  the build result as-is when the OBFUSCATE_JS setting is False.
         Category: Normal case
-        Target: _process_js(page, storage)
+        Target: _process_js(page, storage, scripts)
         Technique: Decision coverage (C1) - OBFUSCATE_JS=False branch
-        Test data: OBFUSCATE_JS=False setting
+        Test data: OBFUSCATE_JS=False setting with pre-extracted script
         """
         page = mock.Mock(pk=42)
         storage = mock.Mock()
@@ -1896,7 +1870,6 @@ class TestProcessJsOptimization:
         script.content = "console.log('hello');"
         script.content_hash = "jshash1"
         script.loading = ""
-        mock_extract.return_value = ([], [script])
 
         mock_builder = mock.Mock()
         mock_builder.build.return_value = "console.log('hello');"
@@ -1913,6 +1886,6 @@ class TestProcessJsOptimization:
             mock.patch("wagtail_asset_publisher.models.PublishedAsset"),
             mock.patch("wagtail_asset_publisher.utils._clear_js_assets"),
         ):
-            _process_js(page, storage)
+            _process_js(page, storage, [script])
 
         mock_optimize.assert_not_called()

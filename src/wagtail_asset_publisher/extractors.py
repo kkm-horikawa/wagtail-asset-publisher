@@ -4,10 +4,18 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from html.parser import HTMLParser
 from typing import NamedTuple
 
 logger = logging.getLogger(__name__)
+
+# Cache for rendered page HTML, keyed by page pk.
+# Used by render_page_html_cached() context manager to avoid
+# rendering the same page multiple times within a single pipeline run.
+_rendered_html_cache: ContextVar[dict[int, str]] = ContextVar("_rendered_html_cache")
 
 
 class ExtractedAsset(NamedTuple):
@@ -165,11 +173,30 @@ def extract_assets(html: str) -> tuple[list[ExtractedAsset], list[ExtractedAsset
 def extract_assets_from_page(
     page: object,
 ) -> tuple[list[ExtractedAsset], list[ExtractedAsset]]:
-    """Extract assets from a Wagtail page's StreamField content.
+    """Extract inline <style> and <script> assets from a Wagtail page.
 
-    Iterates over all StreamField fields on the page, renders each block,
-    and extracts inline <style> and <script> tags.
+    When ``EXTRACT_FROM_TEMPLATES`` is ``True`` (the default), the page is
+    rendered via :func:`render_page_html` and assets are extracted from the
+    full HTML output (which already includes StreamField content).
+    If rendering fails, falls back to StreamField-only extraction.
+
+    When the setting is ``False``, only StreamField blocks are scanned.
     """
+    from .conf import get_setting
+
+    if get_setting("EXTRACT_FROM_TEMPLATES"):
+        html = render_page_html(page)
+        if html:
+            return extract_assets(html)
+        # Rendering failed -- fall back to StreamField-only extraction
+
+    return _extract_assets_from_streamfields(page)
+
+
+def _extract_assets_from_streamfields(
+    page: object,
+) -> tuple[list[ExtractedAsset], list[ExtractedAsset]]:
+    """Extract assets by scanning only StreamField blocks on the page."""
     from wagtail.fields import StreamField
 
     all_styles: list[ExtractedAsset] = []
@@ -189,12 +216,55 @@ def extract_assets_from_page(
     return all_styles, all_scripts
 
 
-def get_page_html_for_tailwind(page: object) -> str:
-    """Render full page HTML for Tailwind CSS class scanning.
+@contextmanager
+def cached_render(page: object) -> Iterator[None]:
+    """Context manager that caches ``render_page_html`` results.
+
+    Within this context, repeated calls to ``render_page_html`` for the
+    same page return the cached result instead of re-rendering.  This
+    eliminates the double render that would otherwise happen when
+    ``EXTRACT_FROM_TEMPLATES=True`` and the CSS builder also needs the
+    rendered HTML (e.g. TailwindCSSBuilder).
+    """
+    pk = getattr(page, "pk", None)
+    if pk is None:
+        yield
+        return
+
+    cache = _rendered_html_cache.get({})
+    token = _rendered_html_cache.set(cache)
+    try:
+        yield
+    finally:
+        cache.pop(pk, None)
+        _rendered_html_cache.reset(token)
+
+
+def render_page_html(page: object) -> str:
+    """Render full page HTML via RequestFactory.
 
     Creates a fake request and renders the page template to get
-    the complete HTML output for Tailwind CLI to scan.
+    the complete HTML output.  Used for asset extraction and
+    Tailwind CSS class scanning.
+
+    When called inside a :func:`cached_render` context, repeated
+    calls for the same page return the cached result.
     """
+    pk = getattr(page, "pk", None)
+    cache = _rendered_html_cache.get(None)
+    if cache is not None and pk is not None and pk in cache:
+        return cache[pk]
+
+    html = _render_page_html_uncached(page)
+
+    if cache is not None and pk is not None:
+        cache[pk] = html
+
+    return html
+
+
+def _render_page_html_uncached(page: object) -> str:
+    """Perform the actual page rendering (no caching)."""
     from django.contrib.auth.models import AnonymousUser
     from django.template.loader import render_to_string
     from django.test import RequestFactory
@@ -218,7 +288,7 @@ def get_page_html_for_tailwind(page: object) -> str:
         return render_to_string(template, context, request=request)
     except Exception:
         logger.warning(
-            "Failed to render page %s (pk=%s) for Tailwind scanning",
+            "Failed to render page %s (pk=%s) for asset extraction",
             type(page).__name__,
             getattr(page, "pk", "?"),
             exc_info=True,
@@ -241,3 +311,7 @@ def _get_page_hostname(page: object) -> str:
     except Exception:
         pass
     return _DEFAULT_HOSTNAME
+
+
+# Backward-compatible alias
+get_page_html_for_tailwind = render_page_html

@@ -194,6 +194,7 @@ class TestDefaultValues:
             "MINIFY_CSS",
             "TERSER_PATH",
             "TERSER_OPTIONS",
+            "EXTRACT_FROM_TEMPLATES",
         }
 
         assert required_keys.issubset(set(DEFAULTS.keys()))
