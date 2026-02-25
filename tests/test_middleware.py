@@ -932,6 +932,7 @@ class TestMiddlewarePreview:
         if isinstance(new_content, bytes):
             new_content = new_content.decode("utf-8")
         assert '<script src="https://cdn/tailwind.js"></script>' in new_content
+        mock_minify.assert_called_once()
 
     @mock.patch("wagtail_asset_publisher.middleware._minify_html")
     @mock.patch("wagtail_asset_publisher.preview.is_tailwind_builder")

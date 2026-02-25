@@ -1,4 +1,4 @@
-"""Middleware for stripping inline assets and injecting static file references."""
+"""Middleware for HTML minification and optional asset injection for Wagtail pages."""
 
 from __future__ import annotations
 
