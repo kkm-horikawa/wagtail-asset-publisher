@@ -189,11 +189,12 @@ def extract_assets_from_page(
     return all_styles, all_scripts
 
 
-def get_page_html_for_tailwind(page: object) -> str:
-    """Render full page HTML for Tailwind CSS class scanning.
+def render_page_html(page: object) -> str:
+    """Render full page HTML via RequestFactory.
 
     Creates a fake request and renders the page template to get
-    the complete HTML output for Tailwind CLI to scan.
+    the complete HTML output.  Used for asset extraction and
+    Tailwind CSS class scanning.
     """
     from django.contrib.auth.models import AnonymousUser
     from django.template.loader import render_to_string
@@ -218,7 +219,7 @@ def get_page_html_for_tailwind(page: object) -> str:
         return render_to_string(template, context, request=request)
     except Exception:
         logger.warning(
-            "Failed to render page %s (pk=%s) for Tailwind scanning",
+            "Failed to render page %s (pk=%s) for asset extraction",
             type(page).__name__,
             getattr(page, "pk", "?"),
             exc_info=True,
@@ -241,3 +242,7 @@ def _get_page_hostname(page: object) -> str:
     except Exception:
         pass
     return _DEFAULT_HOSTNAME
+
+
+# Backward-compatible alias
+get_page_html_for_tailwind = render_page_html
