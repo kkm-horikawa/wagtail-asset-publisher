@@ -165,11 +165,30 @@ def extract_assets(html: str) -> tuple[list[ExtractedAsset], list[ExtractedAsset
 def extract_assets_from_page(
     page: object,
 ) -> tuple[list[ExtractedAsset], list[ExtractedAsset]]:
-    """Extract assets from a Wagtail page's StreamField content.
+    """Extract inline <style> and <script> assets from a Wagtail page.
 
-    Iterates over all StreamField fields on the page, renders each block,
-    and extracts inline <style> and <script> tags.
+    When ``EXTRACT_FROM_TEMPLATES`` is ``True`` (the default), the page is
+    rendered via :func:`render_page_html` and assets are extracted from the
+    full HTML output (which already includes StreamField content).
+    If rendering fails, falls back to StreamField-only extraction.
+
+    When the setting is ``False``, only StreamField blocks are scanned.
     """
+    from .conf import get_setting
+
+    if get_setting("EXTRACT_FROM_TEMPLATES"):
+        html = render_page_html(page)
+        if html:
+            return extract_assets(html)
+        # Rendering failed -- fall back to StreamField-only extraction
+
+    return _extract_assets_from_streamfields(page)
+
+
+def _extract_assets_from_streamfields(
+    page: object,
+) -> tuple[list[ExtractedAsset], list[ExtractedAsset]]:
+    """Extract assets by scanning only StreamField blocks on the page."""
     from wagtail.fields import StreamField
 
     all_styles: list[ExtractedAsset] = []
