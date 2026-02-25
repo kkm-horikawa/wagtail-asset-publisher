@@ -23,7 +23,8 @@ wagtail-asset-publisher solves this transparently. When a page is published, inl
 ## Key Features
 
 - **Zero-config** -- Add to `INSTALLED_APPS`, add middleware, run migrations. No mixin, no template tags, no model changes
-- **Automatic extraction** -- Inline `<style>` and `<script>` tags in StreamField content are extracted at publish time
+- **Full-page extraction** -- By default, the full rendered page HTML is used for asset extraction, capturing inline `<style>` and `<script>` tags defined anywhere in Django templates, not just StreamField blocks (`EXTRACT_FROM_TEMPLATES`, default: `True`)
+- **Automatic extraction** -- Inline `<style>` and `<script>` tags are extracted at publish time
 - **Content-hashed filenames** -- Automatic cache busting: `{page_id}-{hash}.css`
 - **Middleware-driven** -- At render time, matched inline tags are stripped and replaced with static file references
 - **SHA-256 content matching** -- Only strips tags whose content hash matches published assets; base template tags are untouched
@@ -95,7 +96,7 @@ The original inline tags are gone -- replaced by cached, content-hashed static f
 ### How It Works
 
 1. **Publish**: Wagtail fires the `published` signal
-2. **Extract**: All StreamField fields on the page are rendered; inline `<style>` and `<script>` tags are parsed out (respecting `data-no-extract`). Non-JS script types (`importmap`, `speculationrules`, etc.) are skipped and left inline. Each extracted script records its loading strategy (`defer`, `async`, `module`, or blocking).
+2. **Extract**: When `EXTRACT_FROM_TEMPLATES` is `True` (the default), the page is fully rendered via `RequestFactory` and inline `<style>` and `<script>` tags are parsed from the complete HTML output -- including tags defined in base templates and template fragments, not just StreamField blocks. If rendering fails, extraction falls back to StreamField-only scanning. When the setting is `False`, only StreamField blocks are scanned. Tags with `data-no-extract` are always skipped. Non-JS script types (`importmap`, `speculationrules`, etc.) are skipped and left inline. Each extracted script records its loading strategy (`defer`, `async`, `module`, or blocking).
 3. **Group**: Scripts are grouped by loading strategy. Each group is built and stored as a separate file (e.g., `42-abc123.js`, `42-def456-defer.js`, `42-ghi789-module.js`).
 4. **Build**: Each group's content is passed to the configured builder (Raw or Tailwind)
 5. **Store**: Each built output is saved to storage with a content-hashed filename
@@ -116,6 +117,7 @@ WAGTAIL_ASSET_PUBLISHER = {
     "JS_PREFIX": "page-assets/js/",
     "HASH_LENGTH": 8,
     "MINIFY_HTML": True,
+    "EXTRACT_FROM_TEMPLATES": True,
     "TAILWIND_CLI_PATH": None,
     "TAILWIND_CONFIG": None,
     "TAILWIND_BASE_CSS": None,
@@ -139,6 +141,7 @@ WAGTAIL_ASSET_PUBLISHER = {
 | `JS_PREFIX` | `"page-assets/js/"` | Path prefix for JS files in storage |
 | `HASH_LENGTH` | `8` | Length of the content hash in filenames |
 | `MINIFY_HTML` | `True` | Minify HTML responses using `minify-html` (requires `pip install wagtail-asset-publisher[minify]`) |
+| `EXTRACT_FROM_TEMPLATES` | `True` | When `True`, renders the full page HTML at publish time and extracts inline assets from the complete output (base templates, template fragments, and StreamFields). When `False`, only StreamField blocks are scanned. |
 | `TAILWIND_CLI_PATH` | `None` | Path to Tailwind CLI binary (auto-detected if not set) |
 | `TAILWIND_CONFIG` | `None` | Path to Tailwind config file |
 | `TAILWIND_BASE_CSS` | `None` | Path to base input CSS file for Tailwind |
@@ -346,11 +349,12 @@ WAGTAIL_ASSET_PUBLISHER = {
 
 **How it works:**
 
-1. On page publish, the builder renders the page's full HTML
-2. Tailwind CLI scans the HTML for utility classes
-3. Only the CSS for classes actually used is generated
-4. Any extracted inline `<style>` content is included in the build
-5. If the CLI fails, the builder gracefully falls back to raw CSS output
+1. On page publish, the page is rendered to full HTML via `render_page_html()`
+2. When `EXTRACT_FROM_TEMPLATES` is also `True` (the default), the rendered HTML is shared between asset extraction and the Tailwind builder via an internal `cached_render()` context -- the page is rendered only once per publish, regardless of how many pipeline steps need the HTML
+3. Tailwind CLI scans the HTML for utility classes
+4. Only the CSS for classes actually used is generated
+5. Any extracted inline `<style>` content is included in the build
+6. If the CLI fails, the builder gracefully falls back to raw CSS output
 
 **Preview support:** When using the Tailwind builder, the middleware automatically injects the Tailwind CSS browser CDN script into preview responses. This lets editors see Tailwind utility classes rendered in real time before publishing. The CDN script is never injected in published pages.
 
@@ -454,10 +458,26 @@ This is useful after:
 **Issue**: You publish a page but no asset files appear in storage.
 
 **Solutions**:
-1. Confirm the page has StreamField fields containing inline `<style>` or `<script>` tags
+1. Confirm the page contains inline `<style>` or `<script>` tags (in StreamField blocks or templates)
 2. Check that the tags don't have `data-no-extract` attribute
 3. Verify the middleware is in your `MIDDLEWARE` setting
 4. Review Django logs for build errors (logging is under `wagtail_asset_publisher`)
+5. If `EXTRACT_FROM_TEMPLATES` is `True` (the default), check the logs for template rendering errors -- a warning is logged when rendering fails and the extractor falls back to StreamField-only mode
+
+### Template Rendering Fails During Extraction
+
+**Issue**: You see a warning like `Failed to render page MyPage (pk=42) for asset extraction` in the logs.
+
+**Solutions**:
+1. The page's `get_context()` or template may raise an exception when rendered with a plain `RequestFactory` request and an `AnonymousUser`
+2. Guard context dependencies on authentication with a conditional check, or use `data-no-extract` on affected tags
+3. As a last resort, set `EXTRACT_FROM_TEMPLATES` to `False` to fall back to StreamField-only extraction and avoid template rendering entirely
+
+```python
+WAGTAIL_ASSET_PUBLISHER = {
+    "EXTRACT_FROM_TEMPLATES": False,
+}
+```
 
 ### Inline Tags Not Being Replaced
 
