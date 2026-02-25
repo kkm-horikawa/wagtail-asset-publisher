@@ -26,6 +26,8 @@ DEFAULTS: dict[str, Any] = {
     "HASH_LENGTH": 8,
     # HTML minification
     "MINIFY_HTML": True,
+    # Extract assets from full rendered HTML (templates + StreamFields)
+    "EXTRACT_FROM_TEMPLATES": True,
     # Tailwind preview CDN URL
     "TAILWIND_CDN_URL": "https://unpkg.com/@tailwindcss/browser@4",
 }
