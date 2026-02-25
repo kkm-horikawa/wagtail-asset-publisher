@@ -566,6 +566,193 @@ class TestTailwindBuildInputCss:
         custom_pos = result.index(".custom { color: red; }")
         assert base_pos < source_pos < custom_pos
 
+    def test_no_plugins_injected_when_not_configured(self):
+        """No @plugin directives when TAILWIND_PLUGINS is empty (default).
+
+        Purpose: Verify that _build_input_css() does not inject any @plugin
+                 directives when TAILWIND_PLUGINS is an empty list.
+        Category: Normal case
+        Target: TailwindCSSBuilder._build_input_css(custom_css, content_file)
+        Technique: Equivalence partitioning
+        Test data: TAILWIND_PLUGINS=[], TAILWIND_BASE_CSS=None
+        """
+        builder = TailwindCSSBuilder()
+
+        def mock_get_setting(key):
+            settings = {
+                "TAILWIND_BASE_CSS": None,
+                "TAILWIND_PLUGINS": [],
+            }
+            return settings.get(key)
+
+        with mock.patch(
+            "wagtail_asset_publisher.builders.tailwind.get_setting",
+            side_effect=mock_get_setting,
+        ):
+            result = builder._build_input_css("", content_file=None)
+
+        assert "@plugin" not in result
+
+    def test_single_plugin_injected(self):
+        """Single @plugin directive injected for one configured plugin.
+
+        Purpose: Verify that _build_input_css() injects a single @plugin
+                 directive when TAILWIND_PLUGINS contains one entry.
+        Category: Normal case
+        Target: TailwindCSSBuilder._build_input_css(custom_css, content_file)
+        Technique: Equivalence partitioning
+        Test data: TAILWIND_PLUGINS=["@tailwindcss/typography"]
+        """
+        builder = TailwindCSSBuilder()
+
+        def mock_get_setting(key):
+            settings = {
+                "TAILWIND_BASE_CSS": None,
+                "TAILWIND_PLUGINS": ["@tailwindcss/typography"],
+            }
+            return settings.get(key)
+
+        with mock.patch(
+            "wagtail_asset_publisher.builders.tailwind.get_setting",
+            side_effect=mock_get_setting,
+        ):
+            result = builder._build_input_css("", content_file=None)
+
+        assert '@plugin "@tailwindcss/typography";' in result
+
+    def test_multiple_plugins_injected_in_order(self):
+        """Multiple @plugin directives injected in configured order.
+
+        Purpose: Verify that _build_input_css() injects @plugin directives
+                 for all entries in TAILWIND_PLUGINS, preserving order.
+        Category: Normal case
+        Target: TailwindCSSBuilder._build_input_css(custom_css, content_file)
+        Technique: Equivalence partitioning
+        Test data: TAILWIND_PLUGINS with typography and forms
+        """
+        builder = TailwindCSSBuilder()
+        plugins = ["@tailwindcss/typography", "@tailwindcss/forms"]
+
+        def mock_get_setting(key):
+            settings = {
+                "TAILWIND_BASE_CSS": None,
+                "TAILWIND_PLUGINS": plugins,
+            }
+            return settings.get(key)
+
+        with mock.patch(
+            "wagtail_asset_publisher.builders.tailwind.get_setting",
+            side_effect=mock_get_setting,
+        ):
+            result = builder._build_input_css("", content_file=None)
+
+        typography_pos = result.index('@plugin "@tailwindcss/typography"')
+        forms_pos = result.index('@plugin "@tailwindcss/forms"')
+        assert typography_pos < forms_pos
+
+    def test_plugins_ignored_when_base_css_set(self):
+        """TAILWIND_PLUGINS is ignored when TAILWIND_BASE_CSS is set.
+
+        Purpose: Verify that _build_input_css() does not inject @plugin
+                 directives when the user provides a custom base CSS file,
+                 since they have full control over the input CSS.
+        Category: Normal case
+        Target: TailwindCSSBuilder._build_input_css(custom_css, content_file)
+        Technique: Decision coverage (C1)
+        Test data: TAILWIND_BASE_CSS set, TAILWIND_PLUGINS non-empty
+        """
+        builder = TailwindCSSBuilder()
+        base_css_content = '@import "tailwindcss";\n@layer components {}'
+
+        def mock_get_setting(key):
+            settings = {
+                "TAILWIND_BASE_CSS": "/path/to/base.css",
+                "TAILWIND_PLUGINS": ["@tailwindcss/typography"],
+            }
+            return settings.get(key)
+
+        with (
+            mock.patch(
+                "wagtail_asset_publisher.builders.tailwind.get_setting",
+                side_effect=mock_get_setting,
+            ),
+            mock.patch.object(
+                Path,
+                "read_text",
+                return_value=base_css_content,
+            ),
+        ):
+            result = builder._build_input_css("", content_file=None)
+
+        assert "@plugin" not in result
+
+    def test_plugin_directive_ordering(self):
+        """Ordering: @import < @plugin directives < @source < custom CSS.
+
+        Purpose: Verify that _build_input_css() produces output in the correct
+                 order: @import first, @plugin directives second, @source
+                 third, custom CSS last.
+        Category: Normal case
+        Target: TailwindCSSBuilder._build_input_css(custom_css, content_file)
+        Technique: Statement coverage (C0)
+        Test data: Plugin + content_file + custom CSS
+        """
+        builder = TailwindCSSBuilder()
+        content_file = Path("/tmp/content.html")
+        custom_css = ".custom { color: red; }"
+
+        def mock_get_setting(key):
+            settings = {
+                "TAILWIND_BASE_CSS": None,
+                "TAILWIND_PLUGINS": ["@tailwindcss/typography"],
+            }
+            return settings.get(key)
+
+        with mock.patch(
+            "wagtail_asset_publisher.builders.tailwind.get_setting",
+            side_effect=mock_get_setting,
+        ):
+            result = builder._build_input_css(custom_css, content_file=content_file)
+
+        import_pos = result.index('@import "tailwindcss"')
+        plugin_pos = result.index('@plugin "@tailwindcss/typography"')
+        source_pos = result.index('@source "/tmp/content.html"')
+        custom_pos = result.index(".custom { color: red; }")
+        assert import_pos < plugin_pos < source_pos < custom_pos
+
+    def test_plugin_directives_have_semicolons(self):
+        """Each @plugin directive ends with a semicolon.
+
+        Purpose: Verify that every @plugin line has a trailing semicolon,
+                 since missing semicolons cause cryptic Tailwind parser errors.
+        Category: Normal case
+        Target: TailwindCSSBuilder._build_input_css(custom_css, content_file)
+        Technique: Error guessing (missing semicolons)
+        Test data: Multiple plugins
+        """
+        builder = TailwindCSSBuilder()
+        plugins = ["@tailwindcss/typography", "@tailwindcss/forms"]
+
+        def mock_get_setting(key):
+            settings = {
+                "TAILWIND_BASE_CSS": None,
+                "TAILWIND_PLUGINS": plugins,
+            }
+            return settings.get(key)
+
+        with mock.patch(
+            "wagtail_asset_publisher.builders.tailwind.get_setting",
+            side_effect=mock_get_setting,
+        ):
+            result = builder._build_input_css("", content_file=None)
+
+        plugin_lines = [
+            line for line in result.splitlines() if line.startswith("@plugin")
+        ]
+        assert len(plugin_lines) == len(plugins)
+        for line in plugin_lines:
+            assert line.endswith(";")
+
 
 class TestTailwindBuildCommand:
     def test_builds_basic_command(self):

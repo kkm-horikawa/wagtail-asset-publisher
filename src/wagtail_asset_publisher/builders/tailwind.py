@@ -80,12 +80,21 @@ class TailwindCSSBuilder(BaseAssetBuilder):
         When *content_file* is provided, a Tailwind v4 ``@source`` directive
         is inserted so the JIT compiler scans only that file for utility
         classes.
+
+        When ``TAILWIND_BASE_CSS`` is **not** set, ``@plugin`` directives from
+        the ``TAILWIND_PLUGINS`` setting are injected between the
+        ``@import "tailwindcss"`` statement and the ``@source`` directive.
         """
         base_css_path: str | None = get_setting("TAILWIND_BASE_CSS")
         if base_css_path:
             input_css = Path(base_css_path).read_text(encoding="utf-8")
         else:
             input_css = DEFAULT_TAILWIND_INPUT
+
+            plugins: list[str] | None = get_setting("TAILWIND_PLUGINS")
+            if plugins:
+                for plugin in plugins:
+                    input_css += f'@plugin "{plugin}";\n'
 
         if content_file is not None:
             input_css += f'@source "{content_file}";\n'

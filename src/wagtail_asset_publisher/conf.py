@@ -17,6 +17,7 @@ DEFAULTS: dict[str, Any] = {
     "TAILWIND_CLI_PATH": None,
     "TAILWIND_CONFIG": None,
     "TAILWIND_BASE_CSS": None,
+    "TAILWIND_PLUGINS": [],
     # Asset optimization
     "OBFUSCATE_JS": False,
     "MINIFY_CSS": True,

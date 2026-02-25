@@ -121,6 +121,7 @@ WAGTAIL_ASSET_PUBLISHER = {
     "TAILWIND_CLI_PATH": None,
     "TAILWIND_CONFIG": None,
     "TAILWIND_BASE_CSS": None,
+    "TAILWIND_PLUGINS": [],
     "TAILWIND_CDN_URL": "https://unpkg.com/@tailwindcss/browser@4",
     # Asset optimization (requires pip install wagtail-asset-publisher[minify])
     "MINIFY_CSS": True,
@@ -145,6 +146,7 @@ WAGTAIL_ASSET_PUBLISHER = {
 | `TAILWIND_CLI_PATH` | `None` | Path to Tailwind CLI binary (auto-detected if not set) |
 | `TAILWIND_CONFIG` | `None` | Path to Tailwind config file |
 | `TAILWIND_BASE_CSS` | `None` | Path to base input CSS file for Tailwind |
+| `TAILWIND_PLUGINS` | `[]` | List of Tailwind CSS v4 first-party plugin package names to activate via `@plugin` directives. Ignored when `TAILWIND_BASE_CSS` is set. See [Using Tailwind CSS Plugins](#using-tailwind-css-plugins). |
 | `TAILWIND_CDN_URL` | `"https://unpkg.com/@tailwindcss/browser@4"` | Tailwind CDN URL for preview mode |
 | `MINIFY_CSS` | `True` | Minify CSS output via rcssmin (requires `minify` extra) |
 | `OBFUSCATE_JS` | `False` | Minify/obfuscate JS output via terser or rjsmin (requires `minify` extra) |
@@ -357,6 +359,41 @@ WAGTAIL_ASSET_PUBLISHER = {
 6. If the CLI fails, the builder gracefully falls back to raw CSS output
 
 **Preview support:** When using the Tailwind builder, the middleware automatically injects the Tailwind CSS browser CDN script into preview responses. This lets editors see Tailwind utility classes rendered in real time before publishing. The CDN script is never injected in published pages.
+
+### Using Tailwind CSS Plugins
+
+Tailwind CSS v4 ships with several first-party plugins that can be activated via `@plugin` directives. Instead of manually managing a base CSS file, you can list the plugins in the `TAILWIND_PLUGINS` setting and they will be injected automatically:
+
+```python
+WAGTAIL_ASSET_PUBLISHER = {
+    "CSS_BUILDER": "wagtail_asset_publisher.builders.tailwind.TailwindCSSBuilder",
+    "TAILWIND_PLUGINS": [
+        "@tailwindcss/typography",
+        "@tailwindcss/forms",
+    ],
+}
+```
+
+This generates the following input CSS for the Tailwind CLI:
+
+```css
+@import "tailwindcss";
+@plugin "@tailwindcss/typography";
+@plugin "@tailwindcss/forms";
+@source "/tmp/.../content.html";
+```
+
+**Available first-party plugins (bundled with the standalone CLI):**
+
+- `@tailwindcss/typography` -- Beautiful typographic defaults for HTML content
+- `@tailwindcss/forms` -- Form element reset and styling utilities
+- `@tailwindcss/aspect-ratio` -- Aspect ratio utilities for legacy browser support
+
+> **Note:** The `@tailwindcss/container-queries` plugin is built into Tailwind CSS v4 core. No plugin activation is needed -- `@container` queries and `@min-*`/`@max-*` variants work out of the box.
+
+> **Note:** Third-party plugins (not bundled with Tailwind) require a Node.js-based Tailwind CLI installation. The standalone binary only supports first-party plugins. If you need third-party plugins, use `TAILWIND_BASE_CSS` to provide a fully custom input CSS file.
+
+When `TAILWIND_BASE_CSS` is set, `TAILWIND_PLUGINS` is ignored entirely because the user controls the full input CSS. For advanced customization beyond plugin activation, see the `TAILWIND_BASE_CSS` setting.
 
 ### Cross-Package Integration
 
