@@ -168,6 +168,18 @@ class TestDefaultValues:
         """
         assert DEFAULTS["HASH_LENGTH"] == 8
 
+    def test_tailwind_plugins_default_is_empty_list(self):
+        """TAILWIND_PLUGINS defaults to an empty list.
+
+        Purpose: Verify that TAILWIND_PLUGINS defaults to [], ensuring no
+            plugin directives are injected unless explicitly configured.
+        Category: Normal case
+        Target: DEFAULTS["TAILWIND_PLUGINS"]
+        Technique: Equivalence partitioning
+        Test data: DEFAULTS dict value
+        """
+        assert DEFAULTS["TAILWIND_PLUGINS"] == []
+
     def test_defaults_contains_v2_required_keys(self):
         """DEFAULTS contains all keys required by v2 architecture.
 
@@ -189,6 +201,7 @@ class TestDefaultValues:
             "TAILWIND_CLI_PATH",
             "TAILWIND_CONFIG",
             "TAILWIND_BASE_CSS",
+            "TAILWIND_PLUGINS",
             "MINIFY_HTML",
             "OBFUSCATE_JS",
             "MINIFY_CSS",
