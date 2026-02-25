@@ -16,6 +16,7 @@ from urllib.parse import urlparse
 from .conf import get_setting
 from .extractors import (
     ExtractedAsset,
+    cached_render,
     compute_content_hash,
     extract_assets_from_page,
     render_page_html,
@@ -26,11 +27,18 @@ logger = logging.getLogger(__name__)
 
 
 def build_page_assets(page: Any) -> None:
-    """Main entry point: extract, build, publish, and record assets for a page."""
+    """Main entry point: extract, build, publish, and record assets for a page.
+
+    Uses :func:`~extractors.cached_render` so that ``render_page_html``
+    is called at most once per page, even when both asset extraction
+    (``EXTRACT_FROM_TEMPLATES=True``) and the CSS builder
+    (``requires_html_content=True``) need the rendered HTML.
+    """
     storage = get_storage()
-    styles, scripts = extract_assets_from_page(page)
-    _process_css(page, storage, styles)
-    _process_js(page, storage, scripts)
+    with cached_render(page):
+        styles, scripts = extract_assets_from_page(page)
+        _process_css(page, storage, styles)
+        _process_js(page, storage, scripts)
 
 
 def _process_css(page: Any, storage: Any, styles: list[ExtractedAsset]) -> None:

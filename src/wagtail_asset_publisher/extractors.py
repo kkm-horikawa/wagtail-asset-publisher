@@ -4,10 +4,18 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from html.parser import HTMLParser
 from typing import NamedTuple
 
 logger = logging.getLogger(__name__)
+
+# Cache for rendered page HTML, keyed by page pk.
+# Used by render_page_html_cached() context manager to avoid
+# rendering the same page multiple times within a single pipeline run.
+_rendered_html_cache: ContextVar[dict[int, str]] = ContextVar("_rendered_html_cache")
 
 
 class ExtractedAsset(NamedTuple):
@@ -208,13 +216,55 @@ def _extract_assets_from_streamfields(
     return all_styles, all_scripts
 
 
+@contextmanager
+def cached_render(page: object) -> Iterator[None]:
+    """Context manager that caches ``render_page_html`` results.
+
+    Within this context, repeated calls to ``render_page_html`` for the
+    same page return the cached result instead of re-rendering.  This
+    eliminates the double render that would otherwise happen when
+    ``EXTRACT_FROM_TEMPLATES=True`` and the CSS builder also needs the
+    rendered HTML (e.g. TailwindCSSBuilder).
+    """
+    pk = getattr(page, "pk", None)
+    if pk is None:
+        yield
+        return
+
+    cache = _rendered_html_cache.get({})
+    token = _rendered_html_cache.set(cache)
+    try:
+        yield
+    finally:
+        cache.pop(pk, None)
+        _rendered_html_cache.reset(token)
+
+
 def render_page_html(page: object) -> str:
     """Render full page HTML via RequestFactory.
 
     Creates a fake request and renders the page template to get
     the complete HTML output.  Used for asset extraction and
     Tailwind CSS class scanning.
+
+    When called inside a :func:`cached_render` context, repeated
+    calls for the same page return the cached result.
     """
+    pk = getattr(page, "pk", None)
+    cache = _rendered_html_cache.get(None)
+    if cache is not None and pk is not None and pk in cache:
+        return cache[pk]
+
+    html = _render_page_html_uncached(page)
+
+    if cache is not None and pk is not None:
+        cache[pk] = html
+
+    return html
+
+
+def _render_page_html_uncached(page: object) -> str:
+    """Perform the actual page rendering (no caching)."""
     from django.contrib.auth.models import AnonymousUser
     from django.template.loader import render_to_string
     from django.test import RequestFactory
