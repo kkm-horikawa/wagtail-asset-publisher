@@ -85,7 +85,7 @@ class TailwindCSSBuilder(BaseAssetBuilder):
 
         if not isinstance(raw_value, list):
             logger.warning(
-                "TAILWIND_PLUGINS must be a list, got %s. " "Plugin injection skipped.",
+                "TAILWIND_PLUGINS must be a list, got %s. Plugin injection skipped.",
                 type(raw_value).__name__,
             )
             return []
