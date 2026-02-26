@@ -110,7 +110,8 @@ def _get_published_assets(page_id: int) -> dict[str, Any]:
     """Look up published assets for a page, with caching.
 
     CSS is stored as a single dict.  JS is stored as a list of dicts
-    (one per loading strategy) to support defer/async/module grouping.
+    (one per loading/position combination) to support defer/async/module
+    grouping and head/body injection positioning.
     """
     cache_key = f"{CACHE_KEY_PREFIX}{page_id}"
     cached = cache.get(cache_key)
