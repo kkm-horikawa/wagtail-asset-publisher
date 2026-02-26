@@ -35,6 +35,7 @@ wagtail-asset-publisher solves this transparently. When a page is published, inl
 - **Pluggable storage** -- Django default storage (S3, GCS, Azure) or local filesystem
 - **Cross-package integration** -- Snippet publish triggers asset rebuild for all referencing pages via Wagtail's ReferenceIndex
 - **Preview support** -- Inline tags render naturally in preview mode; Tailwind CDN script is auto-injected when using Tailwind builder
+- **Head script protection** -- Inline `<script>` tags in `<head>` are skipped by default, protecting third-party template tag output (GTM, analytics, CMP). Use `data-extract` to opt in.
 - **`data-no-extract` attribute** -- Mark inline tags to skip extraction and keep them inline
 - **Asset optimization** -- Optional CSS minification (rcssmin) and JS obfuscation (terser / rjsmin) with graceful fallbacks
 - **Strategy pattern architecture** -- Extend with custom builders and storage backends
@@ -96,7 +97,7 @@ The original inline tags are gone -- replaced by cached, content-hashed static f
 ### How It Works
 
 1. **Publish**: Wagtail fires the `published` signal
-2. **Extract**: When `EXTRACT_FROM_TEMPLATES` is `True` (the default), the page is fully rendered via `RequestFactory` and inline `<style>` and `<script>` tags are parsed from the complete HTML output -- including tags defined in base templates and template fragments, not just StreamField blocks. If rendering fails, extraction falls back to StreamField-only scanning. When the setting is `False`, only StreamField blocks are scanned. Tags with `data-no-extract` are always skipped. Non-JS script types (`importmap`, `speculationrules`, etc.) are skipped and left inline. Each extracted script records its loading strategy (`defer`, `async`, `module`, or blocking).
+2. **Extract**: When `EXTRACT_FROM_TEMPLATES` is `True` (the default), the page is fully rendered via `RequestFactory` and inline `<style>` and `<script>` tags are parsed from the complete HTML output -- including tags defined in base templates and template fragments, not just StreamField blocks. If rendering fails, extraction falls back to StreamField-only scanning. When the setting is `False`, only StreamField blocks are scanned. Tags with `data-no-extract` are always skipped. Inline `<script>` tags inside `<head>` are skipped by default -- add `data-extract` to opt in. Non-JS script types (`importmap`, `speculationrules`, etc.) are skipped and left inline. Each extracted script records its loading strategy (`defer`, `async`, `module`, or blocking) and injection position (`head` or `body`).
 3. **Group**: Scripts are grouped by loading strategy. Each group is built and stored as a separate file (e.g., `42-abc123.js`, `42-def456-defer.js`, `42-ghi789-module.js`).
 4. **Build**: Each group's content is passed to the configured builder (Raw or Tailwind)
 5. **Store**: Each built output is saved to storage with a content-hashed filename
@@ -211,6 +212,59 @@ This is useful for:
 
 External scripts (`<script src="...">`) are never extracted regardless of attributes.
 
+### Head Script Protection
+
+When `EXTRACT_FROM_TEMPLATES` is `True` (the default), inline `<script>` tags inside `<head>` are **skipped by default** -- they remain inline and are never extracted. This protects scripts from third-party template tags (e.g., `{% seo_head %}`, GTM initialization, analytics, consent management) that must execute in `<head>` for correct behavior.
+
+`<style>` tags in `<head>` are still extracted as usual, since CSS is always injected before `</head>`.
+
+#### `data-extract`: Opt-in extraction for head scripts
+
+To extract a specific `<head>` script, add the `data-extract` attribute. The script will be extracted, bundled, and injected before `</head>`:
+
+```html
+<head>
+  <!-- Skipped by default -- stays inline -->
+  <script>
+    (function(w,d,s,l,i){...})(window,document,'script','dataLayer','GTM-XXXX');
+  </script>
+
+  <!-- Opt-in: extracted and injected before </head> -->
+  <script data-extract>
+    initCriticalFeature();
+  </script>
+</head>
+```
+
+#### `data-head`: Inject body scripts in `<head>`
+
+To extract a `<body>` script and inject it before `</head>` instead of before `</body>`, add the `data-head` attribute:
+
+```html
+<body>
+  <!-- Extracted and injected before </head> -->
+  <script data-head>
+    earlyInit();
+  </script>
+
+  <!-- Extracted and injected before </body> (default) -->
+  <script>
+    lateInit();
+  </script>
+</body>
+```
+
+#### Behavior summary
+
+| Location | Attribute | Extracted? | Injection point |
+|----------|-----------|------------|-----------------|
+| `<head>` | _(none)_ | No | Stays inline |
+| `<head>` | `data-extract` | Yes | Before `</head>` |
+| `<head>` | `data-no-extract` | No | Stays inline |
+| `<body>` | _(none)_ | Yes | Before `</body>` |
+| `<body>` | `data-head` | Yes | Before `</head>` |
+| `<body>` | `data-no-extract` | No | Stays inline |
+
 ### Script Loading Attributes
 
 wagtail-asset-publisher preserves the loading strategy of extracted inline scripts. Scripts with different loading attributes are grouped into separate static files, and the correct attributes are restored on the injected `<script>` tags at serve time.
@@ -251,6 +305,8 @@ Scripts within the same loading group are concatenated into a single file. The i
   { "prefetch": [{ "source": "list", "urls": ["/next-page/"] }] }
 </script>
 ```
+
+`data-head` can be combined with any loading attribute. For example, `<script data-head defer>` will be extracted and injected before `</head>` with the `defer` attribute.
 
 ### Asset Optimization (CSS Minification and JS Obfuscation)
 
