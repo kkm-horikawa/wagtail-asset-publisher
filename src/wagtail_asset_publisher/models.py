@@ -28,14 +28,18 @@ class PublishedAsset(models.Model):
     )
     asset_type = models.CharField(max_length=3, choices=AssetType.choices)
     loading = models.CharField(max_length=16, default="", blank=True)
+    position = models.CharField(max_length=4, default="body", blank=True)
     url = models.URLField(max_length=2048)
     content_hashes = models.JSONField(default=list)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        unique_together = [("page", "asset_type", "loading")]
+        unique_together = [("page", "asset_type", "loading", "position")]
 
     def __str__(self) -> str:
+        parts = [str(self.page_id), self.asset_type]
         if self.loading:
-            return f"PublishedAsset({self.page_id}, {self.asset_type}, {self.loading})"
-        return f"PublishedAsset({self.page_id}, {self.asset_type})"
+            parts.append(self.loading)
+        if self.position == "head":
+            parts.append(self.position)
+        return f"PublishedAsset({', '.join(parts)})"
