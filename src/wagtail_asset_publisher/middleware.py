@@ -110,7 +110,8 @@ def _get_published_assets(page_id: int) -> dict[str, Any]:
     """Look up published assets for a page, with caching.
 
     CSS is stored as a single dict.  JS is stored as a list of dicts
-    (one per loading strategy) to support defer/async/module grouping.
+    (one per loading/position combination) to support defer/async/module
+    grouping and head/body injection positioning.
     """
     cache_key = f"{CACHE_KEY_PREFIX}{page_id}"
     cached = cache.get(cache_key)
@@ -129,6 +130,7 @@ def _get_published_assets(page_id: int) -> dict[str, Any]:
                     "url": asset.url,
                     "content_hashes": set(asset.content_hashes),
                     "loading": asset.loading,
+                    "position": asset.position,
                 }
             )
         else:
@@ -184,14 +186,29 @@ def _process_html(html: str, assets: dict[str, Any]) -> str:
                 else len(_JS_LOADING_ORDER)
             ),
         )
-        js_tags = []
-        for entry in js_entries:
-            attrs = _JS_LOADING_ATTRS.get(entry["loading"], "")
-            js_tags.append(
-                f'<script src="{_escape_attr(entry["url"])}"{attrs}></script>'
-            )
-        js_block = "\n".join(js_tags)
-        html = html.replace("</body>", f"{js_block}\n</body>", 1)
+
+        head_js = [e for e in js_entries if e.get("position") == "head"]
+        body_js = [e for e in js_entries if e.get("position", "body") != "head"]
+
+        if head_js:
+            head_tags = []
+            for entry in head_js:
+                attrs = _JS_LOADING_ATTRS.get(entry["loading"], "")
+                head_tags.append(
+                    f'<script src="{_escape_attr(entry["url"])}"{attrs}></script>'
+                )
+            head_block = "\n".join(head_tags)
+            html = html.replace("</head>", f"{head_block}\n</head>", 1)
+
+        if body_js:
+            body_tags = []
+            for entry in body_js:
+                attrs = _JS_LOADING_ATTRS.get(entry["loading"], "")
+                body_tags.append(
+                    f'<script src="{_escape_attr(entry["url"])}"{attrs}></script>'
+                )
+            body_block = "\n".join(body_tags)
+            html = html.replace("</body>", f"{body_block}\n</body>", 1)
 
     return html
 

@@ -295,6 +295,7 @@ class TestProcessCss:
                 page=page,
                 asset_type="css",
                 loading="",
+                position="",
                 defaults={
                     "url": "/media/page-assets/css/42-css12345.css",
                     "content_hashes": ["hash_css"],
@@ -333,6 +334,7 @@ class TestProcessJs:
         script.content = "console.log('hello');"
         script.content_hash = "jshash1"
         script.loading = ""
+        script.position = "body"
 
         mock_builder = mock.Mock()
         mock_builder.build.return_value = "console.log('hello');"
@@ -432,16 +434,19 @@ class TestProcessJsLoadingGroups:
         blocking_script.content = "blocking();"
         blocking_script.content_hash = "hash_blocking"
         blocking_script.loading = ""
+        blocking_script.position = "body"
 
         defer_script = mock.Mock()
         defer_script.content = "deferred();"
         defer_script.content_hash = "hash_defer"
         defer_script.loading = "defer"
+        defer_script.position = "body"
 
         module_script = mock.Mock()
         module_script.content = "import x from 'y';"
         module_script.content_hash = "hash_module"
         module_script.loading = "module"
+        module_script.position = "body"
 
         mock_builder = mock.Mock()
         mock_builder.build.return_value = "built_js_content"
@@ -496,6 +501,7 @@ class TestProcessJsLoadingGroups:
         script.content = "deferred();"
         script.content_hash = "hash1"
         script.loading = "defer"
+        script.position = "body"
 
         mock_builder = mock.Mock()
         mock_builder.build.return_value = "deferred();"
@@ -548,6 +554,7 @@ class TestProcessJsLoadingGroups:
         script.content = "blocking();"
         script.content_hash = "hash1"
         script.loading = ""
+        script.position = "body"
 
         mock_builder = mock.Mock()
         mock_builder.build.return_value = "blocking();"
@@ -600,6 +607,7 @@ class TestProcessJsLoadingGroups:
         script.content = "import x from 'y';"
         script.content_hash = "hash_module"
         script.loading = "module"
+        script.position = "body"
 
         mock_builder = mock.Mock()
         mock_builder.build.return_value = "import x from 'y';"
@@ -622,6 +630,7 @@ class TestProcessJsLoadingGroups:
                 page=page,
                 asset_type="js",
                 loading="module",
+                position="body",
                 defaults={
                     "url": "/media/page-assets/js/42-mod12345-module.js",
                     "content_hashes": ["hash_module"],
@@ -658,11 +667,13 @@ class TestProcessJsLoadingGroups:
         script1.content = "deferred1();"
         script1.content_hash = "hash1"
         script1.loading = "defer"
+        script1.position = "body"
 
         script2 = mock.Mock()
         script2.content = "deferred2();"
         script2.content_hash = "hash2"
         script2.loading = "defer"
+        script2.position = "body"
 
         mock_builder = mock.Mock()
         mock_builder.build.return_value = "deferred1();deferred2();"
@@ -718,6 +729,7 @@ class TestProcessJsLoadingGroups:
         script.content = "empty_result();"
         script.content_hash = "hash1"
         script.loading = "defer"
+        script.position = "body"
 
         mock_builder = mock.Mock()
         mock_builder.build.return_value = ""
@@ -1818,6 +1830,7 @@ class TestProcessJsOptimization:
         script.content = "var  a  =  1;"
         script.content_hash = "jshash1"
         script.loading = ""
+        script.position = "body"
 
         mock_builder = mock.Mock()
         mock_builder.build.return_value = "var  a  =  1;"
@@ -1870,6 +1883,7 @@ class TestProcessJsOptimization:
         script.content = "console.log('hello');"
         script.content_hash = "jshash1"
         script.loading = ""
+        script.position = "body"
 
         mock_builder = mock.Mock()
         mock_builder.build.return_value = "console.log('hello');"
@@ -1889,3 +1903,356 @@ class TestProcessJsOptimization:
             _process_js(page, storage, [script])
 
         mock_optimize.assert_not_called()
+
+
+class TestProcessJsPositionAware:
+    """Tests for position-aware grouping and filename generation in _process_js."""
+
+    @mock.patch("wagtail_asset_publisher.utils.invalidate_cache")
+    @mock.patch(
+        "wagtail_asset_publisher.utils.compute_content_hash", return_value="pos12345"
+    )
+    @mock.patch("wagtail_asset_publisher.utils.get_setting")
+    @mock.patch("wagtail_asset_publisher.utils.get_builder")
+    def test_groups_by_loading_and_position_tuple(
+        self,
+        mock_get_builder,
+        mock_get_setting,
+        mock_hash,
+        mock_invalidate,
+    ):
+        """_process_js groups scripts by (loading, position) tuple.
+
+        Purpose: Verify that _process_js creates separate groups for scripts
+            with different (loading, position) combinations, enabling separate
+            output files per injection target.
+        Category: Normal case
+        Target: _process_js(page, storage, scripts)
+        Technique: Decision table (grouping by loading + position)
+        Test data: Three scripts: blocking/body, blocking/head, defer/body
+        """
+        page = mock.Mock(pk=42)
+        storage = mock.Mock()
+        storage.save.return_value = "/media/page-assets/js/42-pos12345.js"
+
+        body_blocking = mock.Mock()
+        body_blocking.content = "bodyBlocking();"
+        body_blocking.content_hash = "hash1"
+        body_blocking.loading = ""
+        body_blocking.position = "body"
+
+        head_blocking = mock.Mock()
+        head_blocking.content = "headBlocking();"
+        head_blocking.content_hash = "hash2"
+        head_blocking.loading = ""
+        head_blocking.position = "head"
+
+        body_defer = mock.Mock()
+        body_defer.content = "bodyDefer();"
+        body_defer.content_hash = "hash3"
+        body_defer.loading = "defer"
+        body_defer.position = "body"
+
+        mock_builder = mock.Mock()
+        mock_builder.build.return_value = "built_js"
+        mock_get_builder.return_value = mock_builder
+
+        mock_get_setting.side_effect = lambda key: {
+            "JS_BUILDER": "wagtail_asset_publisher.builders.raw.RawAssetBuilder",
+            "OBFUSCATE_JS": False,
+            "HASH_LENGTH": 8,
+            "JS_PREFIX": "page-assets/js/",
+        }[key]
+
+        with (
+            mock.patch("wagtail_asset_publisher.models.PublishedAsset") as mock_pa,
+            mock.patch("wagtail_asset_publisher.utils._clear_js_assets"),
+        ):
+            _process_js(page, storage, [body_blocking, head_blocking, body_defer])
+
+            assert mock_pa.objects.update_or_create.call_count == 3
+
+        assert storage.save.call_count == 3
+        assert mock_builder.build.call_count == 3
+
+    @mock.patch("wagtail_asset_publisher.utils.invalidate_cache")
+    @mock.patch(
+        "wagtail_asset_publisher.utils.compute_content_hash", return_value="hd123456"
+    )
+    @mock.patch("wagtail_asset_publisher.utils.get_setting")
+    @mock.patch("wagtail_asset_publisher.utils.get_builder")
+    def test_head_position_js_gets_head_suffix_in_filename(
+        self,
+        mock_get_builder,
+        mock_get_setting,
+        mock_hash,
+        mock_invalidate,
+    ):
+        """Head-position JS gets "-head" suffix in filename.
+
+        Purpose: Verify that scripts with position="head" have a "-head"
+            suffix appended to the filename, distinguishing them from
+            body-position scripts.
+        Category: Normal case
+        Target: _process_js(page, storage, scripts) filename generation
+        Technique: Equivalence partitioning (head position)
+        Test data: Pre-extracted script with position="head"
+        """
+        page = mock.Mock(pk=42)
+        storage = mock.Mock()
+        storage.save.return_value = "/media/page-assets/js/42-hd123456-head.js"
+
+        script = mock.Mock()
+        script.content = "headScript();"
+        script.content_hash = "hash1"
+        script.loading = ""
+        script.position = "head"
+
+        mock_builder = mock.Mock()
+        mock_builder.build.return_value = "headScript();"
+        mock_get_builder.return_value = mock_builder
+
+        mock_get_setting.side_effect = lambda key: {
+            "JS_BUILDER": "wagtail_asset_publisher.builders.raw.RawAssetBuilder",
+            "OBFUSCATE_JS": False,
+            "HASH_LENGTH": 8,
+            "JS_PREFIX": "page-assets/js/",
+        }[key]
+
+        with (
+            mock.patch("wagtail_asset_publisher.models.PublishedAsset"),
+            mock.patch("wagtail_asset_publisher.utils._clear_js_assets"),
+        ):
+            _process_js(page, storage, [script])
+
+        storage.save.assert_called_once_with(
+            "page-assets/js/42-hd123456-head.js", "headScript();"
+        )
+
+    @mock.patch("wagtail_asset_publisher.utils.invalidate_cache")
+    @mock.patch(
+        "wagtail_asset_publisher.utils.compute_content_hash", return_value="bd123456"
+    )
+    @mock.patch("wagtail_asset_publisher.utils.get_setting")
+    @mock.patch("wagtail_asset_publisher.utils.get_builder")
+    def test_body_position_js_has_no_position_suffix(
+        self,
+        mock_get_builder,
+        mock_get_setting,
+        mock_hash,
+        mock_invalidate,
+    ):
+        """Body-position JS has no position suffix in filename (backward compat).
+
+        Purpose: Verify that scripts with position="body" do NOT get a
+            position suffix, preserving backward-compatible filenames.
+        Category: Normal case
+        Target: _process_js(page, storage, scripts) filename generation
+        Technique: Boundary value analysis (body is default, no suffix)
+        Test data: Pre-extracted script with position="body"
+        """
+        page = mock.Mock(pk=42)
+        storage = mock.Mock()
+        storage.save.return_value = "/media/page-assets/js/42-bd123456.js"
+
+        script = mock.Mock()
+        script.content = "bodyScript();"
+        script.content_hash = "hash1"
+        script.loading = ""
+        script.position = "body"
+
+        mock_builder = mock.Mock()
+        mock_builder.build.return_value = "bodyScript();"
+        mock_get_builder.return_value = mock_builder
+
+        mock_get_setting.side_effect = lambda key: {
+            "JS_BUILDER": "wagtail_asset_publisher.builders.raw.RawAssetBuilder",
+            "OBFUSCATE_JS": False,
+            "HASH_LENGTH": 8,
+            "JS_PREFIX": "page-assets/js/",
+        }[key]
+
+        with (
+            mock.patch("wagtail_asset_publisher.models.PublishedAsset"),
+            mock.patch("wagtail_asset_publisher.utils._clear_js_assets"),
+        ):
+            _process_js(page, storage, [script])
+
+        storage.save.assert_called_once_with(
+            "page-assets/js/42-bd123456.js", "bodyScript();"
+        )
+
+    @mock.patch("wagtail_asset_publisher.utils.invalidate_cache")
+    @mock.patch(
+        "wagtail_asset_publisher.utils.compute_content_hash", return_value="ld123456"
+    )
+    @mock.patch("wagtail_asset_publisher.utils.get_setting")
+    @mock.patch("wagtail_asset_publisher.utils.get_builder")
+    def test_head_position_with_loading_suffix_in_filename(
+        self,
+        mock_get_builder,
+        mock_get_setting,
+        mock_hash,
+        mock_invalidate,
+    ):
+        """Head JS with loading suffix: filename has both -defer and -head.
+
+        Purpose: Verify that when a script has both a loading strategy and
+            head position, the filename includes both suffixes.
+        Category: Normal case
+        Target: _process_js(page, storage, scripts) filename generation
+        Technique: Equivalence partitioning (loading + position suffixes)
+        Test data: Pre-extracted script with loading="defer", position="head"
+        """
+        page = mock.Mock(pk=42)
+        storage = mock.Mock()
+        storage.save.return_value = "/media/page-assets/js/42-ld123456-defer-head.js"
+
+        script = mock.Mock()
+        script.content = "deferHead();"
+        script.content_hash = "hash1"
+        script.loading = "defer"
+        script.position = "head"
+
+        mock_builder = mock.Mock()
+        mock_builder.build.return_value = "deferHead();"
+        mock_get_builder.return_value = mock_builder
+
+        mock_get_setting.side_effect = lambda key: {
+            "JS_BUILDER": "wagtail_asset_publisher.builders.raw.RawAssetBuilder",
+            "OBFUSCATE_JS": False,
+            "HASH_LENGTH": 8,
+            "JS_PREFIX": "page-assets/js/",
+        }[key]
+
+        with (
+            mock.patch("wagtail_asset_publisher.models.PublishedAsset"),
+            mock.patch("wagtail_asset_publisher.utils._clear_js_assets"),
+        ):
+            _process_js(page, storage, [script])
+
+        storage.save.assert_called_once_with(
+            "page-assets/js/42-ld123456-defer-head.js", "deferHead();"
+        )
+
+    @mock.patch("wagtail_asset_publisher.utils.invalidate_cache")
+    @mock.patch(
+        "wagtail_asset_publisher.utils.compute_content_hash", return_value="css12345"
+    )
+    @mock.patch("wagtail_asset_publisher.utils.get_setting")
+    @mock.patch("wagtail_asset_publisher.utils.get_builder")
+    def test_process_css_passes_empty_position(
+        self,
+        mock_get_builder,
+        mock_get_setting,
+        mock_hash,
+        mock_invalidate,
+    ):
+        """_process_css passes position="" in update_or_create.
+
+        Purpose: Verify that _process_css uses position="" (empty string)
+            when creating CSS records, since CSS is always injected at </head>
+            and does not use the position field.
+        Category: Normal case
+        Target: _process_css(page, storage, styles)
+        Technique: Equivalence partitioning (CSS position is always empty)
+        Test data: Pre-extracted style with CSS content
+        """
+        page = mock.Mock(pk=42)
+        storage = mock.Mock()
+        storage.save.return_value = "/media/page-assets/css/42-css12345.css"
+
+        style = mock.Mock()
+        style.content = "body{}"
+        style.content_hash = "h1"
+
+        mock_builder = mock.Mock()
+        mock_builder.requires_html_content = False
+        mock_builder.build.return_value = "body{}"
+        mock_get_builder.return_value = mock_builder
+
+        mock_get_setting.side_effect = lambda key: {
+            "CSS_BUILDER": "wagtail_asset_publisher.builders.raw.RawAssetBuilder",
+            "MINIFY_CSS": False,
+            "HASH_LENGTH": 8,
+            "CSS_PREFIX": "page-assets/css/",
+        }[key]
+
+        with (
+            mock.patch("wagtail_asset_publisher.models.PublishedAsset") as mock_pa,
+            mock.patch("wagtail_asset_publisher.utils._clear_asset"),
+        ):
+            _process_css(page, storage, [style])
+
+            mock_pa.objects.update_or_create.assert_called_once_with(
+                page=page,
+                asset_type="css",
+                loading="",
+                position="",
+                defaults={
+                    "url": "/media/page-assets/css/42-css12345.css",
+                    "content_hashes": ["h1"],
+                },
+            )
+
+    @mock.patch("wagtail_asset_publisher.utils.invalidate_cache")
+    @mock.patch(
+        "wagtail_asset_publisher.utils.compute_content_hash", return_value="mx123456"
+    )
+    @mock.patch("wagtail_asset_publisher.utils.get_setting")
+    @mock.patch("wagtail_asset_publisher.utils.get_builder")
+    def test_mixed_position_groups_create_separate_records(
+        self,
+        mock_get_builder,
+        mock_get_setting,
+        mock_hash,
+        mock_invalidate,
+    ):
+        """Mixed (loading, position) groups create separate PublishedAsset records.
+
+        Purpose: Verify that scripts with different (loading, position)
+            combinations produce separate update_or_create calls with
+            correct position values.
+        Category: Normal case
+        Target: _process_js(page, storage, scripts)
+        Technique: Decision table (position value propagation)
+        Test data: Two scripts with same loading but different positions
+        """
+        page = mock.Mock(pk=42)
+        storage = mock.Mock()
+        storage.save.return_value = "/media/page-assets/js/42-mx123456.js"
+
+        body_script = mock.Mock()
+        body_script.content = "bodyCode();"
+        body_script.content_hash = "hash_body"
+        body_script.loading = ""
+        body_script.position = "body"
+
+        head_script = mock.Mock()
+        head_script.content = "headCode();"
+        head_script.content_hash = "hash_head"
+        head_script.loading = ""
+        head_script.position = "head"
+
+        mock_builder = mock.Mock()
+        mock_builder.build.return_value = "built_js"
+        mock_get_builder.return_value = mock_builder
+
+        mock_get_setting.side_effect = lambda key: {
+            "JS_BUILDER": "wagtail_asset_publisher.builders.raw.RawAssetBuilder",
+            "OBFUSCATE_JS": False,
+            "HASH_LENGTH": 8,
+            "JS_PREFIX": "page-assets/js/",
+        }[key]
+
+        with (
+            mock.patch("wagtail_asset_publisher.models.PublishedAsset") as mock_pa,
+            mock.patch("wagtail_asset_publisher.utils._clear_js_assets"),
+        ):
+            _process_js(page, storage, [body_script, head_script])
+
+            assert mock_pa.objects.update_or_create.call_count == 2
+
+            calls = mock_pa.objects.update_or_create.call_args_list
+            positions = {call.kwargs["position"] for call in calls}
+            assert positions == {"body", "head"}

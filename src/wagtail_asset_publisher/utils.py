@@ -76,6 +76,7 @@ def _process_css(page: Any, storage: Any, styles: list[ExtractedAsset]) -> None:
         page=page,
         asset_type="css",
         loading="",  # CSS has no loading strategies
+        position="",  # CSS is always injected at </head>
         defaults={"url": url, "content_hashes": content_hashes},
     )
     logger.info("Published CSS for page %d: %s", page.pk, url)
@@ -83,14 +84,15 @@ def _process_css(page: Any, storage: Any, styles: list[ExtractedAsset]) -> None:
 
 
 def _process_js(page: Any, storage: Any, scripts: list[ExtractedAsset]) -> None:
-    """Process JS assets for a page, grouped by loading strategy."""
+    """Process JS assets for a page, grouped by loading strategy and position."""
     from .models import PublishedAsset
 
     builder = get_builder(get_setting("JS_BUILDER"))
 
-    groups: dict[str, list[Any]] = {}
+    groups: dict[tuple[str, str], list[Any]] = {}
     for script in scripts:
-        groups.setdefault(script.loading, []).append(script)
+        key = (script.loading, script.position)
+        groups.setdefault(key, []).append(script)
 
     _clear_js_assets(page, storage)
 
@@ -98,7 +100,7 @@ def _process_js(page: Any, storage: Any, scripts: list[ExtractedAsset]) -> None:
         invalidate_cache(page.pk)
         return
 
-    for loading, group_scripts in groups.items():
+    for (loading, position), group_scripts in groups.items():
         extracted_js = [s.content for s in group_scripts]
         content_hashes = [s.content_hash for s in group_scripts]
 
@@ -112,7 +114,8 @@ def _process_js(page: Any, storage: Any, scripts: list[ExtractedAsset]) -> None:
         js_hash = compute_content_hash(built_js, get_setting("HASH_LENGTH"))
         prefix = get_setting("JS_PREFIX")
         loading_suffix = f"-{loading}" if loading else ""
-        filename = f"{prefix}{page.pk}-{js_hash}{loading_suffix}.js"
+        position_suffix = "-head" if position == "head" else ""
+        filename = f"{prefix}{page.pk}-{js_hash}{loading_suffix}{position_suffix}.js"
 
         url = storage.save(filename, built_js)
 
@@ -120,11 +123,13 @@ def _process_js(page: Any, storage: Any, scripts: list[ExtractedAsset]) -> None:
             page=page,
             asset_type="js",
             loading=loading,
+            position=position,
             defaults={"url": url, "content_hashes": content_hashes},
         )
         logger.info(
-            "Published JS (%s) for page %d: %s",
+            "Published JS (%s, %s) for page %d: %s",
             loading or "blocking",
+            position,
             page.pk,
             url,
         )

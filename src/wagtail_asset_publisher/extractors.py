@@ -24,6 +24,7 @@ class ExtractedAsset(NamedTuple):
     content: str
     content_hash: str
     loading: str = ""  # "", "defer", "async", "module", "module-async"
+    position: str = "body"  # "head" or "body"
 
 
 _JS_MIME_TYPES = frozenset(
@@ -50,6 +51,8 @@ class AssetExtractor(HTMLParser):
         self._skip_current: bool = False
         self._is_external_script: bool = False
         self._current_loading: str = ""
+        self._in_head: bool = False
+        self._current_position: str = "body"
 
     @property
     def styles(self) -> list[ExtractedAsset]:
@@ -60,6 +63,13 @@ class AssetExtractor(HTMLParser):
         return list(self._scripts)
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag == "head":
+            self._in_head = True
+            return
+        if tag == "body":
+            self._in_head = False
+            return
+
         if tag not in ("style", "script"):
             return
 
@@ -78,9 +88,19 @@ class AssetExtractor(HTMLParser):
         self._skip_current = False
         self._is_external_script = False
         self._current_loading = ""
+        self._current_position = "body"
 
         if tag == "script":
             self._current_loading = self._resolve_loading_strategy(attr_dict)
+
+            # Head scripts: skip by default, opt-in with data-extract
+            if self._in_head:
+                if "data-extract" not in attr_dict:
+                    self._skip_current = True
+                    return
+                self._current_position = "head"
+            elif "data-head" in attr_dict:
+                self._current_position = "head"
 
     def handle_data(self, data: str) -> None:
         if (
@@ -91,6 +111,10 @@ class AssetExtractor(HTMLParser):
             self._current_content.append(data)
 
     def handle_endtag(self, tag: str) -> None:
+        if tag == "head":
+            self._in_head = False
+            return
+
         if tag != self._current_tag:
             return
 
@@ -108,6 +132,7 @@ class AssetExtractor(HTMLParser):
                         content=content,
                         content_hash=compute_content_hash(content),
                         loading=self._current_loading,
+                        position=self._current_position,
                     )
                     self._scripts.append(asset)
 
@@ -116,6 +141,7 @@ class AssetExtractor(HTMLParser):
         self._skip_current = False
         self._is_external_script = False
         self._current_loading = ""
+        self._current_position = "body"
 
     def _resolve_loading_strategy(self, attr_dict: dict[str, str | None]) -> str:
         """Determine the loading strategy from <script> tag attributes.
