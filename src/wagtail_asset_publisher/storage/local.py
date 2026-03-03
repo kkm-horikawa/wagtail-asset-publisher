@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from urllib.parse import urlparse
 
 from django.conf import settings
 
@@ -28,7 +29,9 @@ class LocalFileStorage(BaseAssetStorage):
 
     def _get_url(self, path: str) -> str:
         static_url: str = getattr(settings, "STATIC_URL", "/static/")
-        return f"{static_url.rstrip('/')}/{path}"
+        url = f"{static_url.rstrip('/')}/{path}"
+        parsed = urlparse(url)
+        return parsed.path if parsed.scheme else url
 
     def save(self, path: str, content: str) -> str:
         full_path = self._get_full_path(path)
