@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from urllib.parse import urlparse
+
 from django.core.files.base import ContentFile
 from django.core.files.storage import default_storage
 
@@ -18,7 +20,9 @@ class DjangoStorageBackend(BaseAssetStorage):
             default_storage.delete(path)
 
         saved_path = default_storage.save(path, ContentFile(content.encode("utf-8")))
-        return default_storage.url(saved_path)
+        url = default_storage.url(saved_path)
+        parsed = urlparse(url)
+        return parsed.path if parsed.scheme else url
 
     def delete(self, path: str) -> None:
         if default_storage.exists(path):

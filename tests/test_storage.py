@@ -36,6 +36,61 @@ class TestDjangoStorageBackendSave:
         mock_storage.save.assert_called_once()
         mock_storage.delete.assert_not_called()
 
+    def test_save_strips_domain_from_absolute_url(self):
+        """Strip domain from absolute URL returned by default_storage.url().
+
+        Purpose: Verify that DjangoStorageBackend.save() converts an absolute
+            URL (with scheme and domain) to a relative path, ensuring correct
+            behavior on multi-site / CDN deployments where default_storage.url()
+            returns a full URL like https://cdn.example.com/media/....
+        Category: Normal case
+        Target: DjangoStorageBackend.save(path, content)
+        Technique: Equivalence partitioning
+        Test data: default_storage.url() returning an absolute URL with
+            https scheme and CDN domain
+        """
+        backend = DjangoStorageBackend()
+        path = "page-assets/css/42-abcd1234.css"
+        content = "body { color: red; }"
+
+        with mock.patch(
+            "wagtail_asset_publisher.storage.django_storage.default_storage"
+        ) as mock_storage:
+            mock_storage.exists.return_value = False
+            mock_storage.save.return_value = path
+            mock_storage.url.return_value = f"https://cdn.example.com/media/{path}"
+
+            result = backend.save(path, content)
+
+        assert result == f"/media/{path}"
+
+    def test_save_preserves_relative_url(self):
+        """Preserve relative URL returned by default_storage.url().
+
+        Purpose: Verify that DjangoStorageBackend.save() returns a relative
+            URL unchanged when default_storage.url() already returns a
+            path-only URL, ensuring no unintended transformation on standard
+            local storage setups.
+        Category: Normal case
+        Target: DjangoStorageBackend.save(path, content)
+        Technique: Equivalence partitioning
+        Test data: default_storage.url() returning a relative path-only URL
+        """
+        backend = DjangoStorageBackend()
+        path = "page-assets/css/42-abcd1234.css"
+        content = "body { color: red; }"
+
+        with mock.patch(
+            "wagtail_asset_publisher.storage.django_storage.default_storage"
+        ) as mock_storage:
+            mock_storage.exists.return_value = False
+            mock_storage.save.return_value = path
+            mock_storage.url.return_value = f"/media/{path}"
+
+            result = backend.save(path, content)
+
+        assert result == f"/media/{path}"
+
     def test_save_overwrites_existing_file(self):
         """Delete existing file before saving.
 
@@ -357,6 +412,51 @@ class TestLocalFileStorageStaticRootValidation:
             "wagtail_asset_publisher.storage.local.settings"
         ) as mock_settings:
             mock_settings.STATIC_URL = "/static"
+
+            result = backend._get_url("page-assets/css/42.css")
+
+        assert result == "/static/page-assets/css/42.css"
+
+    def test_get_url_strips_domain_from_absolute_static_url(self):
+        """Strip domain from absolute STATIC_URL (CDN configuration).
+
+        Purpose: Verify that _get_url() converts an absolute STATIC_URL
+            (with scheme and domain) to a relative path, ensuring correct
+            behavior on multi-site / CDN deployments where STATIC_URL is
+            set to a full URL like https://cdn.example.com/static/.
+        Category: Normal case
+        Target: LocalFileStorage._get_url(path)
+        Technique: Equivalence partitioning
+        Test data: STATIC_URL with https scheme and CDN domain
+        """
+        backend = LocalFileStorage()
+
+        with mock.patch(
+            "wagtail_asset_publisher.storage.local.settings"
+        ) as mock_settings:
+            mock_settings.STATIC_URL = "https://cdn.example.com/static/"
+
+            result = backend._get_url("page-assets/css/42.css")
+
+        assert result == "/static/page-assets/css/42.css"
+
+    def test_get_url_preserves_relative_static_url(self):
+        """Preserve relative STATIC_URL unchanged.
+
+        Purpose: Verify that _get_url() returns the URL unchanged when
+            STATIC_URL is already a relative path, ensuring no unintended
+            transformation on standard local development setups.
+        Category: Normal case
+        Target: LocalFileStorage._get_url(path)
+        Technique: Equivalence partitioning
+        Test data: STATIC_URL with relative path (/static/)
+        """
+        backend = LocalFileStorage()
+
+        with mock.patch(
+            "wagtail_asset_publisher.storage.local.settings"
+        ) as mock_settings:
+            mock_settings.STATIC_URL = "/static/"
 
             result = backend._get_url("page-assets/css/42.css")
 
